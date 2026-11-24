@@ -210,7 +210,7 @@ pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
     let font = FontId::proportional(14.0);
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_string(), font, Color32::WHITE);
+        .layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let size = Vec2::new((galley.size().x + 28.0).max(64.0), 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 

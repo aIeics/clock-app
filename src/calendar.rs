@@ -2,9 +2,10 @@
 //! way to add a reminder to the selected day.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime};
-use eframe::egui;
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::reminders::{Reminders, Repeat};
+use crate::theme::{self, Icon, Kind};
 
 const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS: [&str; 12] = [
@@ -106,124 +107,240 @@ impl CalendarView {
 
     /// Draws the tab. Returns `true` if the reminders should be saved.
     pub fn ui(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
-        let today = Local::now().date_naive();
         let mut changed = false;
 
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(2.0);
+                self.header(ui);
+                ui.add_space(6.0);
+                self.grid(ui, reminders);
+                ui.add_space(10.0);
+                changed |= self.day_panel(ui, reminders);
+                ui.add_space(8.0);
+            });
+
+        changed
+    }
+
+    /// Month name with previous/next arrows and a "Today" button.
+    fn header(&mut self, ui: &mut egui::Ui) {
+        let today = Local::now().date_naive();
+        let spacing = ui.spacing().item_spacing.x;
+        let title_width = 170.0;
+        let width = 34.0 * 2.0 + title_width + 72.0 + spacing * 3.0;
+
         ui.horizontal(|ui| {
-            if ui.add(egui::Button::new("<").small()).clicked() {
+            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+            if theme::icon_button(ui, Icon::ChevronLeft, 34.0, false).clicked() {
                 (self.year, self.month) = shifted_month(self.year, self.month, -1);
             }
-            ui.heading(format!("{} {}", MONTHS[self.month as usize - 1], self.year));
-            if ui.add(egui::Button::new(">").small()).clicked() {
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(title_width, 34.0), Sense::hover());
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("{} {}", MONTHS[self.month as usize - 1], self.year),
+                FontId::proportional(19.0),
+                theme::TEXT,
+            );
+            if theme::icon_button(ui, Icon::ChevronRight, 34.0, false).clicked() {
                 (self.year, self.month) = shifted_month(self.year, self.month, 1);
             }
-            if ui.button("Today").clicked() {
+            if theme::button(ui, "Today", Kind::Ghost).clicked() {
                 self.go_to_month(today);
                 self.selected = today;
             }
         });
+    }
 
-        egui::Grid::new("month").num_columns(7).show(ui, |ui| {
-            for name in WEEKDAYS {
-                ui.strong(name);
-            }
-            ui.end_row();
+    /// The month grid. Slides sideways when the month changes.
+    fn grid(&mut self, ui: &mut egui::Ui, reminders: &Reminders) {
+        let today = Local::now().date_naive();
+        let weeks = month_grid(self.year, self.month);
+        let width = ui.available_width();
+        let gap = 6.0;
+        let cell_w = (width - gap * 6.0) / 7.0;
+        let cell_h = (cell_w * 0.8).clamp(32.0, 64.0);
+        let header_h = 22.0;
+        let height = header_h + weeks.len() as f32 * (cell_h + gap);
 
-            for week in month_grid(self.year, self.month) {
-                for day in week {
-                    let Some(date) = day else {
-                        ui.label("");
-                        continue;
-                    };
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let index = (self.year * 12 + self.month as i32) as f32;
+        let slide = theme::animate(ui.ctx(), egui::Id::unique("calendar-month"), index, 0.3);
+        let offset = (slide - index).clamp(-1.0, 1.0);
+        let shift = Vec2::new(-offset * 36.0, 0.0);
+        let opacity = 1.0 - offset.abs() * 0.8;
+        let painter = ui.painter().clone().with_clip_rect(rect.expand(2.0));
+        let cell_at = |row: usize, col: usize| {
+            Rect::from_min_size(
+                rect.min
+                    + Vec2::new(
+                        col as f32 * (cell_w + gap),
+                        header_h + row as f32 * (cell_h + gap),
+                    ),
+                Vec2::new(cell_w, cell_h),
+            )
+        };
 
-                    let marked = reminders.on(date).next().is_some();
-                    let label = if marked {
-                        format!("{} •", date.day())
-                    } else {
-                        date.day().to_string()
-                    };
-
-                    let mut button = egui::Button::new(label)
-                        .min_size(egui::Vec2::new(36.0, 22.0))
-                        .selected(self.selected == date);
-                    if date == today {
-                        button = button.fill(egui::Color32::from_rgb(59, 130, 246));
-                    }
-                    if ui.add(button).clicked() {
-                        self.selected = date;
-                    }
-                }
-                ui.end_row();
-            }
-        });
-
-        ui.separator();
-        ui.heading(self.selected.format("%-d %B %Y").to_string());
-        let rows: Vec<_> = reminders.on(self.selected).cloned().collect();
-        if rows.is_empty() {
-            ui.label("Nothing on this day.");
-        } else {
-            for reminder in rows {
-                ui.horizontal(|ui| {
-                    ui.label(reminder.when.format("%H:%M").to_string());
-                    ui.label(reminder.title);
-                });
-            }
+        for (col, name) in WEEKDAYS.iter().enumerate() {
+            let x = rect.left() + col as f32 * (cell_w + gap) + cell_w / 2.0;
+            painter.text(
+                Pos2::new(x, rect.top() + header_h / 2.0 - 3.0),
+                egui::Align2::CENTER_CENTER,
+                name.to_uppercase(),
+                FontId::proportional(11.0),
+                theme::TEXT_DIM,
+            );
         }
 
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Time");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_time)
-                    .hint_text("HH:MM")
-                    .desired_width(58.0),
-            );
-            ui.label("Title");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_title)
-                    .hint_text("New reminder")
-                    .desired_width(130.0),
-            );
-        });
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_label("Repeat")
-                .selected_text(self.new_repeat.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.new_repeat, Repeat::Once, Repeat::Once.label());
-                    ui.selectable_value(&mut self.new_repeat, Repeat::Daily, Repeat::Daily.label());
-                    ui.selectable_value(
-                        &mut self.new_repeat,
-                        Repeat::Weekly,
-                        Repeat::Weekly.label(),
+        let font = FontId::proportional((cell_h * 0.36).clamp(13.0, 18.0));
+        for (row, week) in weeks.iter().enumerate() {
+            for (col, day) in week.iter().enumerate() {
+                let Some(date) = *day else { continue };
+                let cell = cell_at(row, col);
+                let response = ui
+                    .interact(
+                        cell,
+                        egui::Id::unique(("calendar-day", date)),
+                        Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if response.clicked() {
+                    self.selected = date;
+                }
+
+                let hover = ui
+                    .ctx()
+                    .animate_bool_responsive(response.id.with("hover"), response.hovered());
+                let selected = ui.ctx().animate_bool_with_time_and_easing(
+                    response.id.with("selected"),
+                    self.selected == date,
+                    0.2,
+                    egui::emath::easing::cubic_out,
+                );
+                let is_today = date == today;
+                let cell = cell.translate(shift);
+                let fade = |color: Color32| color.gamma_multiply(opacity);
+
+                let fill = if is_today {
+                    theme::TEXT
+                } else {
+                    theme::SURFACE.lerp_to_gamma(theme::SURFACE_HI, hover)
+                };
+                painter.rect_filled(cell, 8.0, fade(fill));
+                if selected > 0.0 && !is_today {
+                    painter.rect_stroke(
+                        cell.shrink(1.0 - selected),
+                        8.0,
+                        Stroke::new(1.5, fade(theme::TEXT.gamma_multiply(selected))),
+                        StrokeKind::Inside,
                     );
-                });
-            if ui.button("Add").clicked() {
-                match self.new_reminder_when() {
-                    Some(when) if !self.new_title.trim().is_empty() => {
-                        reminders.add(
-                            self.new_title.trim().to_string(),
-                            String::new(),
-                            when,
-                            self.new_repeat,
-                        );
-                        self.new_title.clear();
-                        self.new_time.clear();
-                        self.new_repeat = Repeat::Once;
-                        self.error = None;
-                        changed = true;
-                    }
-                    _ => self.error = Some("Enter a time (HH:MM) and a title.".to_string()),
+                }
+
+                let weekend = col >= 5;
+                let color = if is_today {
+                    theme::BG
+                } else if weekend {
+                    theme::TEXT_DIM
+                } else {
+                    theme::TEXT
+                };
+                painter.text(
+                    cell.center() - Vec2::new(0.0, 3.0),
+                    egui::Align2::CENTER_CENTER,
+                    date.day().to_string(),
+                    font.clone(),
+                    fade(color),
+                );
+                if reminders.on(date).next().is_some() {
+                    let dot = if is_today { theme::BG } else { theme::TEXT };
+                    painter.circle_filled(
+                        Pos2::new(cell.center().x, cell.bottom() - cell_h * 0.16),
+                        2.5,
+                        fade(dot),
+                    );
                 }
             }
-        });
-        if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::from_rgb(239, 68, 68), error.clone());
         }
+    }
 
+    /// The selected day's reminders and the quick-add form.
+    fn day_panel(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
+        let mut changed = false;
+        theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(self.selected.format("%A, %-d %B %Y").to_string())
+                        .size(16.0)
+                        .color(theme::TEXT),
+                );
+
+                let rows: Vec<_> = reminders.on(self.selected).cloned().collect();
+                if rows.is_empty() {
+                    ui.label(egui::RichText::new("Nothing on this day.").color(theme::TEXT_DIM));
+                }
+                for reminder in rows {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}  \u{00b7}  {}",
+                            reminder.when.format("%H:%M"),
+                            reminder.title
+                        ))
+                        .color(theme::TEXT),
+                    );
+                }
+
+                ui.add_space(6.0);
+                theme::section_label(ui, "Add to this day");
+                let width = ui.available_width();
+                ui.columns(2, |columns| {
+                    let half = columns[0].available_width();
+                    theme::text_field(&mut columns[0], &mut self.new_time, "HH:MM", half);
+                    theme::text_field(&mut columns[1], &mut self.new_title, "New reminder", half);
+                });
+                theme::segmented(
+                    ui,
+                    egui::Id::unique("calendar-repeat"),
+                    &mut self.new_repeat,
+                    &REPEATS,
+                    Vec2::new(width, 32.0),
+                    8.0,
+                );
+                ui.add_space(4.0);
+                if theme::button(ui, "Add", Kind::Primary).clicked() {
+                    match self.new_reminder_when() {
+                        Some(when) if !self.new_title.trim().is_empty() => {
+                            reminders.add(
+                                self.new_title.trim().to_string(),
+                                String::new(),
+                                when,
+                                self.new_repeat,
+                            );
+                            self.new_title.clear();
+                            self.new_time.clear();
+                            self.new_repeat = Repeat::Once;
+                            self.error = None;
+                            changed = true;
+                        }
+                        _ => self.error = Some("Enter a time (HH:MM) and a title.".to_string()),
+                    }
+                }
+                if let Some(error) = &self.error {
+                    theme::error_text(ui, error);
+                }
+            });
+        });
         changed
     }
 }
+
+const REPEATS: [(Repeat, &str); 3] = [
+    (Repeat::Once, "Once"),
+    (Repeat::Daily, "Daily"),
+    (Repeat::Weekly, "Weekly"),
+];
 
 #[cfg(test)]
 mod tests {
