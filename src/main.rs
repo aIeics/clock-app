@@ -10,6 +10,7 @@ mod reminders;
 mod settings;
 mod storage;
 mod timer;
+mod tray;
 
 use eframe::egui;
 

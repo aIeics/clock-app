@@ -18,6 +18,9 @@ eframe = { version = "0.37", default-features = false, features = ["default_font
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 
+# System tray icon: close-to-tray behaviour. Linux-only default features stay off.
+tray-icon = { version = "0.26", default-features = false }
+
 # Small, fast release binary.
 [profile.release]
 opt-level = "z"

@@ -7,6 +7,7 @@ use crate::reminders::{Reminders, RemindersView};
 use crate::settings::Settings;
 use crate::storage::Store;
 use crate::timer::TimerView;
+use crate::tray::Tray;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
@@ -41,13 +42,21 @@ pub struct ClockApp {
     reminders: Reminders,
     reminders_view: RemindersView,
     calendar: CalendarView,
+    tray: Option<Tray>,
 }
 
 impl ClockApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let store = Store::new();
         let settings = Settings::load(&store);
         let reminders = Reminders::load(&store);
+        let tray = match Tray::new(cc.egui_ctx.clone()) {
+            Ok(tray) => Some(tray),
+            Err(err) => {
+                eprintln!("clock-app: {err}");
+                None
+            }
+        };
 
         Self {
             tab: Tab::default(),
@@ -58,12 +67,22 @@ impl ClockApp {
             reminders,
             reminders_view: RemindersView::default(),
             calendar: CalendarView::default(),
+            tray,
         }
     }
 }
 
 impl eframe::App for ClockApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // The window close button hides the app in the tray instead of ending
+        // it. "Quit" from the tray menu sets a flag so the close can proceed.
+        let quitting = self.tray.as_ref().is_some_and(Tray::quit_requested);
+        if self.tray.is_some() && !quitting && ctx.input(|input| input.viewport().close_requested())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
         // Called even while the window is hidden, so timers and reminders can
         // become due without the UI having to run.
         self.timer.logic(ctx);
