@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::clock::{format_date, format_time, until_next_tick};
 use crate::settings::Settings;
 use crate::storage::Store;
+use crate::theme;
 
 pub const FILE: &str = "popout.json";
 fn viewport_id() -> egui::ViewportId {
@@ -346,7 +347,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     egui::Label::new(
                         egui::RichText::new(format_time(&now, &settings))
                             .size(40.0)
-                            .monospace()
+                            .family(theme::bold_family())
                             .color(egui::Color32::WHITE),
                     )
                     .selectable(false)
