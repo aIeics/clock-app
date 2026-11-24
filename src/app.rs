@@ -1,6 +1,11 @@
 use eframe::egui;
 
-use crate::{calendar::CalendarView, clock::ClockView, reminders::RemindersView, timer::TimerView};
+use crate::calendar::CalendarView;
+use crate::clock::ClockView;
+use crate::reminders::RemindersView;
+use crate::settings::Settings;
+use crate::storage::Store;
+use crate::timer::TimerView;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
@@ -26,9 +31,10 @@ impl Tab {
 
 /// Root of the app: a tab bar on top, the selected feature below.
 /// Each feature lives in its own module and owns its own state.
-#[derive(Default)]
 pub struct ClockApp {
     tab: Tab,
+    store: Store,
+    settings: Settings,
     clock: ClockView,
     timer: TimerView,
     reminders: RemindersView,
@@ -37,7 +43,18 @@ pub struct ClockApp {
 
 impl ClockApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self::default()
+        let store = Store::new();
+        let settings = Settings::load(&store);
+
+        Self {
+            tab: Tab::default(),
+            store,
+            settings,
+            clock: ClockView,
+            timer: TimerView::default(),
+            reminders: RemindersView::default(),
+            calendar: CalendarView::default(),
+        }
     }
 }
 
@@ -52,7 +69,13 @@ impl eframe::App for ClockApp {
         });
 
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Clock => self.clock.ui(ui),
+            Tab::Clock => {
+                let before = self.settings.clone();
+                self.clock.ui(ui, &mut self.settings);
+                if self.settings != before {
+                    self.settings.save(&self.store);
+                }
+            }
             Tab::Timer => self.timer.ui(ui),
             Tab::Reminders => self.reminders.ui(ui),
             Tab::Calendar => self.calendar.ui(ui),
