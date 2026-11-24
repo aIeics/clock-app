@@ -18,11 +18,26 @@ pub const FILE: &str = "popout.json";
 fn viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("clock-popout")
 }
+fn menu_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("clock-popout-menu")
+}
 
 const DEFAULT_POSITION: [f32; 2] = [120.0, 120.0];
 const DEFAULT_SIZE: [f32; 2] = [260.0, 96.0];
 const MIN_SIZE: egui::Vec2 = egui::Vec2::new(180.0, 74.0);
 const MAX_SIZE: egui::Vec2 = egui::Vec2::new(800.0, 400.0);
+/// Width of the right-click menu window. Its height follows its content.
+const MENU_WIDTH: f32 = 190.0;
+/// First guess at the menu size, used to keep it on screen before it is measured.
+const MENU_ESTIMATE: egui::Vec2 = egui::Vec2::new(MENU_WIDTH, 230.0);
+const TEXT_COLORS: [(&str, [u8; 4]); 6] = [
+    ("White", [255, 255, 255, 255]),
+    ("Amber", [255, 191, 0, 255]),
+    ("Green", [0, 255, 128, 255]),
+    ("Red", [255, 80, 80, 255]),
+    ("Cyan", [0, 220, 255, 255]),
+    ("Magenta", [255, 100, 255, 255]),
+];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -58,6 +73,12 @@ struct State {
     /// builder comment in `Popout::ui` for why that state is needed.
     #[serde(skip)]
     initialized: bool,
+    /// Screen position of the open right-click menu, in points.
+    #[serde(skip)]
+    menu: Option<[f32; 2]>,
+    /// The menu window has had focus, so losing it now means "clicked away".
+    #[serde(skip)]
+    menu_focused: bool,
 }
 
 impl Default for State {
@@ -75,6 +96,8 @@ impl Default for State {
             dragging: false,
             resizing: false,
             initialized: false,
+            menu: None,
+            menu_focused: false,
         }
     }
 }
@@ -209,55 +232,184 @@ impl Popout {
     }
 }
 
-fn keep_behind_apps(ui: &egui::Ui) {
-    ui.ctx()
-        .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-            egui::viewport::WindowLevel::AlwaysOnBottom,
-        ));
+/// Commands here always target the pop-out window, also when they are sent
+/// from the menu window's pass.
+fn keep_behind_apps(ctx: &egui::Context) {
+    ctx.send_viewport_cmd_to(
+        viewport_id(),
+        egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::AlwaysOnBottom),
+    );
 }
 
-fn set_locked(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, locked: bool) {
+/// Apply a menu choice to the saved state, then close the menu.
+fn choose(
+    ctx: &egui::Context,
+    state: &Arc<RwLock<State>>,
+    store: &Arc<Store>,
+    apply: impl FnOnce(&mut State),
+) {
     let mut current = state.write().expect("popout state lock");
-    current.locked = locked;
-    current.dragging = false;
-    current.resizing = false;
+    apply(&mut current);
     current.save(store);
     drop(current);
-    ui.close();
-    ui.ctx()
-        .memory_mut(|mem| mem.move_focus(egui::FocusDirection::None));
-    keep_behind_apps(ui);
+    close_menu(ctx, state);
+    keep_behind_apps(ctx);
 }
 
-fn set_font(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, font: PopoutFont) {
-    let mut current = state.write().expect("popout state lock");
-    current.font = font;
-    current.save(store);
-    drop(current);
-    ui.close();
-    keep_behind_apps(ui);
-}
-
-fn set_text_color(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, color: [u8; 4]) {
-    let mut current = state.write().expect("popout state lock");
-    current.text_color = color;
-    current.save(store);
-    drop(current);
-    ui.close();
-    keep_behind_apps(ui);
-}
-
-fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
+fn close(ctx: &egui::Context, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     let mut current = state.write().expect("popout state lock");
     current.open = false;
     current.dragging = false;
     current.resizing = false;
     current.initialized = false;
+    current.menu = None;
     current.save(store);
     drop(current);
-    ui.close();
-    ui.ctx()
-        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
+}
+
+/// Where the menu window opens for a right-click at `click` (screen points).
+/// It flips left or up when it would run off the monitor. egui only reports
+/// the monitor's size, not where it is, so this assumes the monitor starts at
+/// (0, 0) and leaves clicks outside that area alone.
+fn menu_position(click: egui::Pos2, menu: egui::Vec2, monitor: Option<egui::Vec2>) -> egui::Pos2 {
+    let Some(monitor) = monitor else {
+        return click;
+    };
+    if !egui::Rect::from_min_size(egui::Pos2::ZERO, monitor).contains(click) {
+        return click;
+    }
+    let flip = |at: f32, len: f32, limit: f32| {
+        if at + len > limit {
+            (at - len).max(0.0)
+        } else {
+            at
+        }
+    };
+    egui::pos2(
+        flip(click.x, menu.x, monitor.x),
+        flip(click.y, menu.y, monitor.y),
+    )
+}
+
+fn open_menu(ctx: &egui::Context, state: &Arc<RwLock<State>>, at: egui::Pos2) {
+    let mut current = state.write().expect("popout state lock");
+    let already_open = current.menu.is_some();
+    current.menu = Some([at.x, at.y]);
+    current.menu_focused = false;
+    drop(current);
+    if already_open {
+        // A new builder position moves it; it also needs the focus back.
+        ctx.send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Focus);
+    }
+}
+
+fn close_menu(ctx: &egui::Context, state: &Arc<RwLock<State>>) {
+    let mut current = state.write().expect("popout state lock");
+    current.menu = None;
+    current.menu_focused = false;
+    drop(current);
+    // The pop-out's next pass stops showing the menu viewport, which closes it.
+    ctx.request_repaint_of(viewport_id());
+}
+
+/// The right-click menu, in its own small native window. The pop-out is too
+/// small to hold an in-window popup: it got clipped to the clock's size.
+fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
+    let ctx = ui.ctx().clone();
+    let (focused, close_requested, escape, inner_size) = ui.input(|input| {
+        let info = input.viewport();
+        (
+            info.focused,
+            info.close_requested(),
+            input.key_pressed(egui::Key::Escape),
+            info.inner_rect.map(|rect| rect.size()),
+        )
+    });
+
+    let (locked, font, color) = {
+        let mut current = state.write().expect("popout state lock");
+        if current.menu.is_none() {
+            return;
+        }
+        // Close on click-away, but only once it has had focus: a new window
+        // is not focused yet on its first pass.
+        let clicked_away = focused == Some(false) && current.menu_focused;
+        if focused == Some(true) {
+            current.menu_focused = true;
+        }
+        if clicked_away || close_requested || escape {
+            drop(current);
+            close_menu(&ctx, state);
+            return;
+        }
+        (current.locked, current.font, current.text_color)
+    };
+
+    let full_width = egui::vec2(ui.available_width(), 0.0);
+    let frame = egui::Frame::menu(ui.style()).corner_radius(0);
+    let shown = frame.show(ui, |ui| {
+        ui.set_width(MENU_WIDTH - frame.total_margin().sum().x);
+        ui.label(egui::RichText::new("Font").weak());
+        for option in PopoutFont::ALL {
+            let button = egui::Button::selectable(option == font, option.label());
+            if ui.add(button.min_size(full_width)).clicked() {
+                choose(&ctx, state, store, |current| current.font = option);
+            }
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("Color").weak());
+        ui.horizontal(|ui| {
+            for (name, value) in TEXT_COLORS {
+                if color_swatch(ui, value, value == color)
+                    .on_hover_text(name)
+                    .clicked()
+                {
+                    choose(&ctx, state, store, |current| current.text_color = value);
+                }
+            }
+        });
+        ui.separator();
+        let lock_label = if locked { "Unlock" } else { "Lock" };
+        if ui
+            .add(egui::Button::new(lock_label).min_size(full_width))
+            .clicked()
+        {
+            choose(&ctx, state, store, |current| {
+                current.locked = !locked;
+                current.dragging = false;
+                current.resizing = false;
+            });
+        }
+        if ui
+            .add(egui::Button::new("Close pop-out").min_size(full_width))
+            .clicked()
+        {
+            close(&ctx, state, store);
+        }
+    });
+
+    // Fit the window to the menu once its size is known.
+    let wanted = shown.response.rect.size();
+    if inner_size.is_some_and(|size| (size - wanted).length() > 0.5) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted));
+    }
+}
+
+fn color_swatch(ui: &mut egui::Ui, value: [u8; 4], selected: bool) -> egui::Response {
+    let [r, g, b, a] = value;
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(20.0), egui::Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect.shrink(3.0),
+        3.0,
+        egui::Color32::from_rgba_unmultiplied(r, g, b, a),
+    );
+    if selected || response.hovered() {
+        let stroke = ui.visuals().widgets.active.fg_stroke;
+        painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+    }
+    response
 }
 
 /// Let Windows handle the resize gesture. `is_pointer_button_down_on` is true
@@ -277,7 +429,7 @@ fn resize_window(
         current.resizing = true;
         drop(current);
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::BeginResize(
                 egui::viewport::ResizeDirection::SouthEast,
@@ -292,7 +444,7 @@ fn resize_window(
         }
         current.save(store);
         drop(current);
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
     }
 }
 
@@ -313,7 +465,7 @@ fn drag_window(
         current.dragging = true;
         drop(current);
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         return;
     }
@@ -326,13 +478,13 @@ fn drag_window(
         }
         current.save(store);
         drop(current);
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
     }
 }
 
 fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     if ui.input(|input| input.viewport().close_requested()) {
-        close(ui, state, store);
+        close(ui.ctx(), state, store);
         return;
     }
 
@@ -359,10 +511,10 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             .send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
     }
 
-    let panel = egui::CentralPanel::default()
+    egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ui, |ui| {
             ui.vertical_centered(|ui| {
@@ -428,58 +580,43 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             }
         });
 
-    // A container context menu also opens when the click lands on the time or
-    // date text, which a plain response-based context menu can miss.
-    panel.response.container_context_menu(|ui| {
-        ui.set_min_width(180.0);
-        let max_h = 260.0;
-        egui::ScrollArea::vertical()
-            .max_height(max_h)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width().max(180.0));
-                ui.label(egui::RichText::new("Pop-out").strong());
-                ui.separator();
-                ui.menu_button("Fonts", |ui| {
-                    ui.set_min_width(160.0);
-                    for option in PopoutFont::ALL {
-                        let selected = option == font;
-                        if ui.selectable_label(selected, option.label()).clicked() {
-                            set_font(ui, state, store, option);
-                        }
-                    }
-                });
-                ui.menu_button("Color", |ui| {
-                    ui.set_min_width(140.0);
-                    let colors: [(&str, [u8; 4]); 6] = [
-                        ("White", [255, 255, 255, 255]),
-                        ("Amber", [255, 191, 0, 255]),
-                        ("Green", [0, 255, 128, 255]),
-                        ("Red", [255, 80, 80, 255]),
-                        ("Cyan", [0, 220, 255, 255]),
-                        ("Magenta", [255, 100, 255, 255]),
-                    ];
-                    for (name, value) in colors {
-                        let selected = value == [color.r(), color.g(), color.b(), color.a()];
-                        if ui.selectable_label(selected, name).clicked() {
-                            set_text_color(ui, state, store, value);
-                        }
-                    }
-                });
-                ui.separator();
-                let lock_label = if locked { "Unlock" } else { "Lock" };
-                if ui.button(lock_label).clicked() {
-                    set_locked(ui, state, store, !locked);
-                }
-                if ui.button("Close pop-out").clicked() {
-                    close(ui, state, store);
-                }
-            });
+    // Right-click anywhere on the pop-out, text included, opens the menu.
+    let click = ui.input(|input| {
+        if !input.pointer.secondary_clicked() {
+            return None;
+        }
+        let info = input.viewport();
+        let origin = info.inner_rect?.min;
+        let local = input.pointer.interact_pos()?;
+        Some((origin + local.to_vec2(), info.monitor_size))
     });
+    if let Some((at, monitor)) = click {
+        open_menu(ui.ctx(), state, menu_position(at, MENU_ESTIMATE, monitor));
+    }
+
+    let menu = state.read().expect("popout state lock").menu;
+    if let Some([x, y]) = menu {
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Clock menu")
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_taskbar(false)
+            .with_always_on_top()
+            .with_active(true)
+            .with_position(egui::pos2(x, y))
+            .with_inner_size(MENU_ESTIMATE);
+        let state = Arc::clone(state);
+        let store = Arc::clone(store);
+        ui.ctx()
+            .show_viewport_deferred(menu_viewport_id(), builder, move |ui, _class| {
+                render_menu(ui, &state, &store);
+            });
+    }
 
     // Windows only applies AlwaysOnBottom when the level changes, so reassert it
     // after focus changes and whenever another window is opened.
     if !dragging && !resizing && !ui.input(|input| input.pointer.any_down()) {
-        keep_behind_apps(ui);
+        keep_behind_apps(ui.ctx());
     }
 }
 
@@ -559,5 +696,30 @@ mod tests {
         assert_eq!(loaded.text_color, [0, 255, 128, 255]);
         assert_eq!(loaded.font, PopoutFont::DigitTech);
         assert_eq!(loaded.settings, Settings::default());
+    }
+
+    #[test]
+    fn the_menu_opens_at_the_click_and_stays_on_screen() {
+        let menu = egui::vec2(190.0, 230.0);
+        let monitor = Some(egui::vec2(1920.0, 1080.0));
+        // Room to spare: open right at the click.
+        assert_eq!(
+            menu_position(egui::pos2(300.0, 200.0), menu, monitor),
+            egui::pos2(300.0, 200.0)
+        );
+        // Near the bottom-right corner: flip left and up.
+        assert_eq!(
+            menu_position(egui::pos2(1850.0, 1000.0), menu, monitor),
+            egui::pos2(1660.0, 770.0)
+        );
+        // Another monitor, or no monitor info: leave it alone.
+        assert_eq!(
+            menu_position(egui::pos2(2500.0, 1000.0), menu, monitor),
+            egui::pos2(2500.0, 1000.0)
+        );
+        assert_eq!(
+            menu_position(egui::pos2(1850.0, 1000.0), menu, None),
+            egui::pos2(1850.0, 1000.0)
+        );
     }
 }
