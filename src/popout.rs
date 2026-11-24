@@ -268,22 +268,32 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             ui.vertical_centered(|ui| {
                 let now = Local::now();
                 ui.add_space(6.0);
+                // `Sense::drag()` also makes the label focusable, which draws
+                // a focus outline. Use the raw drag sense and keep the labels
+                // non-selectable so only the text is visible.
                 let sense = if locked {
                     egui::Sense::hover()
                 } else {
-                    egui::Sense::drag()
+                    egui::Sense::DRAG
                 };
                 let time = ui.add(
                     egui::Label::new(
                         egui::RichText::new(format_time(&now, &settings))
                             .size(40.0)
-                            .monospace(),
+                            .monospace()
+                            .color(egui::Color32::WHITE),
                     )
+                    .selectable(false)
                     .sense(sense),
                 );
                 let date = ui.add(
-                    egui::Label::new(egui::RichText::new(format_date(&now)).size(14.0))
-                        .sense(sense),
+                    egui::Label::new(
+                        egui::RichText::new(format_date(&now))
+                            .size(14.0)
+                            .color(egui::Color32::WHITE),
+                    )
+                    .selectable(false)
+                    .sense(sense),
                 );
                 if !locked {
                     drag_window(
@@ -306,7 +316,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             if !locked {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
                     // Invisible resize corner: only the text is drawn.
-                    let grip = ui.allocate_response(egui::Vec2::splat(16.0), egui::Sense::drag());
+                    let grip = ui.allocate_response(egui::Vec2::splat(16.0), egui::Sense::DRAG);
                     resize_window(
                         ui,
                         state,
