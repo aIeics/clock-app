@@ -252,26 +252,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         (current.locked, current.settings.clone())
     };
 
-    egui::CentralPanel::default().show(ui, |ui| {
-        // Right-click anywhere on the widget for Lock/Unlock and Close.
-        let background = ui.interact(
-            ui.max_rect(),
-            ui.scope_id().with("popout_background"),
-            egui::Sense::hover(),
-        );
-        background.context_menu(|ui| {
-            if locked {
-                if ui.button("Unlock").clicked() {
-                    set_locked(state, store, false);
-                }
-            } else if ui.button("Lock").clicked() {
-                set_locked(state, store, true);
-            }
-            if ui.button("Close pop-out").clicked() {
-                close(ui, state, store);
-            }
-        });
-
+    let panel = egui::CentralPanel::default().show(ui, |ui| {
         if !locked {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 if ui.button("Close").clicked() {
@@ -330,6 +311,21 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 );
                 resize_window(ui, state, store, grip);
             });
+        }
+    });
+
+    // A container context menu also opens when the click lands on the time or
+    // date text, which a plain response-based context menu can miss.
+    panel.response.container_context_menu(|ui| {
+        if locked {
+            if ui.button("Unlock").clicked() {
+                set_locked(state, store, false);
+            }
+        } else if ui.button("Lock").clicked() {
+            set_locked(state, store, true);
+        }
+        if ui.button("Close pop-out").clicked() {
+            close(ui, state, store);
         }
     });
 }
