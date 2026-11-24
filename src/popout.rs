@@ -37,6 +37,13 @@ struct State {
     /// A copy of the clock format options; saved in `settings.json`, not here.
     #[serde(skip)]
     settings: Settings,
+    /// The initial window placement. Kept fixed while the widget moves so the
+    /// parent doesn't resend a position every frame and fight the drag.
+    #[serde(skip)]
+    placement: Option<[f32; 2]>,
+    /// The initial window size, for the same reason as `placement`.
+    #[serde(skip)]
+    placement_size: Option<[f32; 2]>,
 }
 
 impl Default for State {
@@ -47,6 +54,8 @@ impl Default for State {
             position: None,
             size: DEFAULT_SIZE,
             settings: Settings::default(),
+            placement: None,
+            placement_size: None,
         }
     }
 }
@@ -80,6 +89,30 @@ impl State {
         let size = size.clamp(MIN_SIZE, MAX_SIZE);
         self.size = [size.x, size.y];
     }
+
+    /// Where the native window is first created. This never changes while it is
+    /// open: dragging sends `OuterPosition` commands directly to the child.
+    fn placement(&self) -> egui::Pos2 {
+        self.placement
+            .map(|[x, y]| egui::pos2(x, y))
+            .unwrap_or_else(|| self.position())
+    }
+
+    fn placement_size(&self) -> egui::Vec2 {
+        self.placement_size
+            .map(|[x, y]| egui::vec2(x, y))
+            .unwrap_or_else(|| self.size())
+    }
+
+    /// Freeze the current layout as the native window's starting geometry.
+    fn freeze_layout(&mut self) {
+        if self.position.is_none() {
+            let pos = self.position();
+            self.set_position(pos);
+        }
+        self.placement = self.position;
+        self.placement_size = Some([self.size[0], self.size[1]]);
+    }
 }
 
 /// Keeps the shared state and gives the main tab a handle to open the window.
@@ -91,7 +124,9 @@ pub struct Popout {
 impl Popout {
     pub fn new(store: Store) -> Self {
         let store = Arc::new(store);
-        let state = Arc::new(RwLock::new(State::load(&store)));
+        let mut loaded = State::load(&store);
+        loaded.freeze_layout();
+        let state = Arc::new(RwLock::new(loaded));
         Self { state, store }
     }
 
@@ -100,10 +135,7 @@ impl Popout {
         let mut state = self.state.write().expect("popout state lock");
         if !state.open {
             state.open = true;
-            if state.position.is_none() {
-                let pos = state.position();
-                state.set_position(pos);
-            }
+            state.freeze_layout();
             state.save(&self.store);
         }
     }
@@ -119,9 +151,9 @@ impl Popout {
     /// Called once per main-window pass. Deferred viewports let the floating
     /// clock repaint every second without waking the main window too.
     pub fn ui(&self, ctx: &egui::Context) {
-        let (open, position, size) = {
+        let (open, placement, size) = {
             let state = self.state.read().expect("popout state lock");
-            (state.open, state.position(), state.size())
+            (state.open, state.placement(), state.placement_size())
         };
         if !open {
             return;
@@ -133,7 +165,7 @@ impl Popout {
             .with_resizable(false)
             .with_taskbar(false)
             .with_always_on_top()
-            .with_position(position)
+            .with_position(placement)
             .with_inner_size(size)
             .with_min_inner_size(MIN_SIZE)
             .with_max_inner_size(MAX_SIZE);
@@ -146,32 +178,72 @@ impl Popout {
     }
 }
 
-fn move_from_drag(
+fn set_locked(state: &Arc<RwLock<State>>, store: &Arc<Store>, locked: bool) {
+    let mut current = state.write().expect("popout state lock");
+    current.locked = locked;
+    current.save(store);
+}
+
+/// Let Windows handle the resize gesture too, for the same reason as dragging.
+fn resize_window(
     ui: &egui::Ui,
     state: &Arc<RwLock<State>>,
     store: &Arc<Store>,
     response: egui::Response,
 ) {
-    if response.dragged() {
-        let mut current = state.write().expect("popout state lock");
-        let pos = current.position() + response.drag_delta();
-        current.set_position(pos);
+    if response.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            .send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                egui::viewport::ResizeDirection::SouthEast,
+            ));
     }
     if response.drag_stopped() {
-        state.read().expect("popout state lock").save(store);
+        let native_size = ui.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
+        if let Some(size) = native_size {
+            let mut current = state.write().expect("popout state lock");
+            current.set_size(size);
+            current.save(store);
+        }
+    }
+}
+
+fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
+    let mut current = state.write().expect("popout state lock");
+    current.open = false;
+    current.save(store);
+    drop(current);
+    ui.ctx()
+        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+}
+
+/// Let Windows move the whole viewport while the pointer is held down.
+/// Driving it with `OuterPosition` commands from egui made dragging lag, because
+/// moving the window under the pointer changes the next pointer delta.
+fn drag_window(
+    ui: &egui::Ui,
+    state: &Arc<RwLock<State>>,
+    store: &Arc<Store>,
+    response: egui::Response,
+) {
+    if response.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    if response.drag_stopped() {
+        let native_position =
+            ui.input(|input| input.viewport().outer_rect.map(|rect| rect.left_top()));
+        if let Some(pos) = native_position {
+            let mut current = state.write().expect("popout state lock");
+            current.set_position(pos);
+            current.save(store);
+        }
     }
 }
 
 fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     if ui.input(|input| input.viewport().close_requested()) {
-        let mut current = state.write().expect("popout state lock");
-        current.open = false;
-        current.save(store);
-        drop(current);
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        close(ui, state, store);
         return;
     }
 
@@ -188,39 +260,25 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             egui::Sense::hover(),
         );
         background.context_menu(|ui| {
-            let mut current = state.write().expect("popout state lock");
-            if current.locked {
+            if locked {
                 if ui.button("Unlock").clicked() {
-                    current.locked = false;
-                    current.save(store);
+                    set_locked(state, store, false);
                 }
             } else if ui.button("Lock").clicked() {
-                current.locked = true;
-                current.save(store);
+                set_locked(state, store, true);
             }
             if ui.button("Close pop-out").clicked() {
-                current.open = false;
-                current.save(store);
-                drop(current);
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                close(ui, state, store);
             }
         });
 
         if !locked {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 if ui.button("Close").clicked() {
-                    let mut current = state.write().expect("popout state lock");
-                    current.open = false;
-                    current.save(store);
-                    drop(current);
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    close(ui, state, store);
                 }
                 if ui.button("Lock").clicked() {
-                    let mut current = state.write().expect("popout state lock");
-                    current.locked = true;
-                    current.save(store);
+                    set_locked(state, store, true);
                 }
             });
         }
@@ -245,13 +303,13 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 egui::Label::new(egui::RichText::new(format_date(&now)).size(14.0)).sense(sense),
             );
             if !locked {
-                move_from_drag(
+                drag_window(
                     ui,
                     state,
                     store,
                     time.on_hover_cursor(egui::CursorIcon::Grab),
                 );
-                move_from_drag(
+                drag_window(
                     ui,
                     state,
                     store,
@@ -270,16 +328,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     [rect.left_bottom(), rect.right_top()],
                     ui.visuals().widgets.noninteractive.fg_stroke,
                 );
-                if grip.dragged() {
-                    let mut current = state.write().expect("popout state lock");
-                    let size = current.size() + grip.drag_delta();
-                    current.set_size(size);
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::InnerSize(current.size()));
-                }
-                if grip.drag_stopped() {
-                    state.read().expect("popout state lock").save(store);
-                }
+                resize_window(ui, state, store, grip);
             });
         }
     });
@@ -313,6 +362,26 @@ mod tests {
 
         state.set_size(egui::vec2(2000.0, 2000.0));
         assert_eq!(state.size(), MAX_SIZE);
+    }
+
+    #[test]
+    fn moving_updates_the_saved_layout_but_not_the_window_placement() {
+        let mut state = State {
+            position: Some([100.0, 120.0]),
+            ..Default::default()
+        };
+        state.freeze_layout();
+
+        state.set_position(egui::pos2(400.0, 260.0));
+        state.set_size(egui::vec2(320.0, 110.0));
+
+        assert_eq!(state.position(), egui::pos2(400.0, 260.0));
+        assert_eq!(state.size(), egui::vec2(320.0, 110.0));
+        assert_eq!(state.placement(), egui::pos2(100.0, 120.0));
+        assert_eq!(
+            state.placement_size(),
+            egui::vec2(DEFAULT_SIZE[0], DEFAULT_SIZE[1])
+        );
     }
 
     #[test]
