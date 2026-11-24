@@ -44,6 +44,15 @@ struct State {
     /// The initial window size, for the same reason as `placement`.
     #[serde(skip)]
     placement_size: Option<[f32; 2]>,
+    /// Active native move/resize gesture, so we start each one only once.
+    #[serde(skip)]
+    dragging: bool,
+    #[serde(skip)]
+    resizing: bool,
+    /// The window has left its one-frame fullscreen creation state. See the
+    /// builder comment in `Popout::ui` for why that state is needed.
+    #[serde(skip)]
+    initialized: bool,
 }
 
 impl Default for State {
@@ -56,6 +65,9 @@ impl Default for State {
             settings: Settings::default(),
             placement: None,
             placement_size: None,
+            dragging: false,
+            resizing: false,
+            initialized: false,
         }
     }
 }
@@ -136,6 +148,7 @@ impl Popout {
         if !state.open {
             state.open = true;
             state.freeze_layout();
+            state.initialized = false;
             state.save(&self.store);
         }
     }
@@ -159,6 +172,9 @@ impl Popout {
             return;
         }
 
+        // Windows adds a drop shadow (and a 1px border) to undecorated windows.
+        // Creating the viewport fullscreen disables that shadow; the first child
+        // pass leaves fullscreen and restores the saved geometry before painting.
         let builder = egui::ViewportBuilder::default()
             .with_title("Clock")
             .with_decorations(false)
@@ -167,6 +183,7 @@ impl Popout {
             .with_transparent(true)
             .with_has_shadow(false)
             .with_window_level(egui::viewport::WindowLevel::AlwaysOnBottom)
+            .with_fullscreen(true)
             .with_position(placement)
             .with_inner_size(size)
             .with_min_inner_size(MIN_SIZE)
@@ -180,47 +197,71 @@ impl Popout {
     }
 }
 
-fn set_locked(state: &Arc<RwLock<State>>, store: &Arc<Store>, locked: bool) {
-    let mut current = state.write().expect("popout state lock");
-    current.locked = locked;
-    current.save(store);
+fn keep_behind_apps(ui: &egui::Ui) {
+    ui.ctx()
+        .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::viewport::WindowLevel::AlwaysOnBottom,
+        ));
 }
 
-/// Let Windows handle the resize gesture too, for the same reason as dragging.
+fn set_locked(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, locked: bool) {
+    let mut current = state.write().expect("popout state lock");
+    current.locked = locked;
+    current.dragging = false;
+    current.resizing = false;
+    current.save(store);
+    drop(current);
+    ui.ctx()
+        .memory_mut(|mem| mem.move_focus(egui::FocusDirection::None));
+    keep_behind_apps(ui);
+}
+
+fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
+    let mut current = state.write().expect("popout state lock");
+    current.open = false;
+    current.dragging = false;
+    current.resizing = false;
+    current.initialized = false;
+    current.save(store);
+    drop(current);
+    ui.ctx()
+        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+}
+
+/// Let Windows handle the resize gesture. `is_pointer_button_down_on` is true
+/// from the press frame, unlike `drag_started`, so unlocking doesn't swallow
+/// the first drag.
 fn resize_window(
     ui: &egui::Ui,
     state: &Arc<RwLock<State>>,
     store: &Arc<Store>,
     response: egui::Response,
 ) {
-    if response.drag_started() {
+    let primary_down = ui.input(|input| input.pointer.primary_down());
+    let pressed_here = primary_down && response.is_pointer_button_down_on();
+
+    let mut current = state.write().expect("popout state lock");
+    if pressed_here && !current.resizing {
+        current.resizing = true;
+        drop(current);
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        keep_behind_apps(ui);
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::BeginResize(
                 egui::viewport::ResizeDirection::SouthEast,
             ));
+        return;
     }
-    if response.drag_stopped() {
+    if !primary_down && current.resizing {
+        current.resizing = false;
         let native_size = ui.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
         if let Some(size) = native_size {
-            let mut current = state.write().expect("popout state lock");
             current.set_size(size);
-            current.save(store);
         }
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                egui::viewport::WindowLevel::AlwaysOnBottom,
-            ));
+        current.save(store);
+        drop(current);
+        keep_behind_apps(ui);
     }
-}
-
-fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
-    let mut current = state.write().expect("popout state lock");
-    current.open = false;
-    current.save(store);
-    drop(current);
-    ui.ctx()
-        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
 }
 
 /// Let Windows move the whole viewport while the pointer is held down.
@@ -232,22 +273,28 @@ fn drag_window(
     store: &Arc<Store>,
     response: egui::Response,
 ) {
-    if response.drag_started() {
+    let primary_down = ui.input(|input| input.pointer.primary_down());
+    let pressed_here = primary_down && response.is_pointer_button_down_on();
+
+    let mut current = state.write().expect("popout state lock");
+    if pressed_here && !current.dragging {
+        current.dragging = true;
+        drop(current);
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        keep_behind_apps(ui);
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        return;
     }
-    if response.drag_stopped() {
+    if !primary_down && current.dragging {
+        current.dragging = false;
         let native_position =
             ui.input(|input| input.viewport().outer_rect.map(|rect| rect.left_top()));
         if let Some(pos) = native_position {
-            let mut current = state.write().expect("popout state lock");
             current.set_position(pos);
-            current.save(store);
         }
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                egui::viewport::WindowLevel::AlwaysOnBottom,
-            ));
+        current.save(store);
+        drop(current);
+        keep_behind_apps(ui);
     }
 }
 
@@ -257,10 +304,29 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         return;
     }
 
-    let (locked, settings) = {
+    let (locked, settings, position, size, initialized, dragging, resizing) = {
         let current = state.read().expect("popout state lock");
-        (current.locked, current.settings.clone())
+        (
+            current.locked,
+            current.settings.clone(),
+            current.position(),
+            current.size(),
+            current.initialized,
+            current.dragging,
+            current.resizing,
+        )
     };
+
+    if !initialized {
+        state.write().expect("popout state lock").initialized = true;
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        keep_behind_apps(ui);
+    }
 
     let panel = egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
@@ -332,15 +398,21 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     panel.response.container_context_menu(|ui| {
         if locked {
             if ui.button("Unlock").clicked() {
-                set_locked(state, store, false);
+                set_locked(ui, state, store, false);
             }
         } else if ui.button("Lock").clicked() {
-            set_locked(state, store, true);
+            set_locked(ui, state, store, true);
         }
         if ui.button("Close pop-out").clicked() {
             close(ui, state, store);
         }
     });
+
+    // Windows only applies AlwaysOnBottom when the level changes, so reassert it
+    // after focus changes and whenever another window is opened.
+    if !dragging && !resizing && !ui.input(|input| input.pointer.any_down()) {
+        keep_behind_apps(ui);
+    }
 }
 
 #[cfg(test)]
