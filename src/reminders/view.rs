@@ -84,6 +84,7 @@ impl RemindersView {
                 ui.label(
                     egui::RichText::new("Upcoming")
                         .size(18.0)
+                        .family(theme::bold_family())
                         .color(theme::TEXT),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

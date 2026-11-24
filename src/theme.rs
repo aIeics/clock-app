@@ -46,6 +46,7 @@ pub fn column<R>(ui: &mut Ui, max_width: f32, add: impl FnOnce(&mut Ui) -> R) ->
 /// Installs the style. The theme is forced to dark so the look doesn't
 /// depend on the Windows light/dark setting.
 pub fn apply(ctx: &egui::Context) {
+    install_fonts(ctx);
     ctx.set_theme(Theme::Dark);
     ctx.style_mut_of(Theme::Dark, |style| {
         style.animation_time = 0.18;
@@ -57,7 +58,7 @@ pub fn apply(ctx: &egui::Context) {
         spacing.combo_width = 90.0;
 
         let text = &mut style.text_styles;
-        text.insert(egui::TextStyle::Heading, FontId::proportional(20.0));
+        text.insert(egui::TextStyle::Heading, bold(20.0));
         text.insert(egui::TextStyle::Body, FontId::proportional(14.0));
         text.insert(egui::TextStyle::Button, FontId::proportional(14.0));
         text.insert(egui::TextStyle::Small, FontId::proportional(12.0));
@@ -104,6 +105,55 @@ pub fn apply(ctx: &egui::Context) {
             state.expansion = 0.0;
         }
     });
+}
+
+/// Manrope, a variable font (SIL Open Font License, see
+/// `assets/fonts/Manrope-OFL.txt`). One file gives every weight we use.
+const MANROPE: &[u8] = include_bytes!("../assets/fonts/Manrope-Variable.ttf");
+
+/// The font family for large numbers and headings.
+pub fn bold_family() -> egui::FontFamily {
+    egui::FontFamily::Name("bold".into())
+}
+
+/// A bold font at `size`, for large numbers and headings.
+pub fn bold(size: f32) -> FontId {
+    FontId::new(size, bold_family())
+}
+
+/// Makes Manrope semi-bold the default text font and adds a bold family.
+/// egui's built-in fonts stay behind them as fallbacks for missing glyphs.
+fn install_fonts(ctx: &egui::Context) {
+    let weight = |wght: f32| {
+        egui::FontData::from_static(MANROPE).tweak(egui::epaint::text::FontTweak {
+            coords: egui::epaint::text::VariationCoords::new([(*b"wght", wght)]),
+            ..Default::default()
+        })
+    };
+
+    let mut fonts = egui::FontDefinitions::default();
+    fonts
+        .font_data
+        .insert("manrope-semibold".into(), weight(600.0).into());
+    fonts
+        .font_data
+        .insert("manrope-bold".into(), weight(780.0).into());
+
+    let fallbacks = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let with = |first: &str| {
+        let mut list = vec![first.to_string()];
+        list.extend(fallbacks.iter().cloned());
+        list
+    };
+    fonts
+        .families
+        .insert(egui::FontFamily::Proportional, with("manrope-semibold"));
+    fonts.families.insert(bold_family(), with("manrope-bold"));
+    ctx.set_fonts(fonts);
 }
 
 /// Eased value animation with a `cubic_out` curve. Returns `target` the

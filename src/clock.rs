@@ -2,7 +2,7 @@ use std::f32::consts::TAU;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, Timelike};
-use eframe::egui::{self, Color32, FontId, Pos2, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
 
 use crate::settings::Settings;
 use crate::theme;
@@ -56,7 +56,7 @@ impl ClockView {
             ui.painter(),
             rect.center(),
             &format_time(&now, settings),
-            FontId::proportional(digits),
+            theme::bold(digits),
             theme::TEXT,
         );
         ui.label(

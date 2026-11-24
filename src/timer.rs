@@ -399,7 +399,7 @@ fn wheel(
             Pos2::new(rect.center().x, rect.center().y + offset * row),
             egui::Align2::CENTER_CENTER,
             format!("{i:02}"),
-            FontId::proportional(row * 0.72 * scale),
+            theme::bold(row * 0.72 * scale),
             theme::TEXT.gamma_multiply(opacity),
         );
     }

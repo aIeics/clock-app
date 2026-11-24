@@ -103,6 +103,7 @@ impl CalendarView {
                 ui.label(
                     egui::RichText::new(middle.format("%B %Y").to_string())
                         .size(17.0)
+                        .family(theme::bold_family())
                         .color(theme::TEXT),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -187,7 +188,7 @@ impl CalendarView {
                 Pos2::new(cell.center().x, cell.top() + 31.0),
                 egui::Align2::CENTER_CENTER,
                 date.day().to_string(),
-                FontId::proportional(17.0),
+                theme::bold(17.0),
                 ink.gamma_multiply(fade),
             );
             if reminders.on(date).next().is_some() {
