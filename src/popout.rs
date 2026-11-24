@@ -146,6 +146,24 @@ impl Popout {
     }
 }
 
+fn move_from_drag(
+    ui: &egui::Ui,
+    state: &Arc<RwLock<State>>,
+    store: &Arc<Store>,
+    response: egui::Response,
+) {
+    if response.dragged() {
+        let mut current = state.write().expect("popout state lock");
+        let pos = current.position() + response.drag_delta();
+        current.set_position(pos);
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+    }
+    if response.drag_stopped() {
+        state.read().expect("popout state lock").save(store);
+    }
+}
+
 fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     if ui.input(|input| input.viewport().close_requested()) {
         let mut current = state.write().expect("popout state lock");
@@ -190,24 +208,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         });
 
         if !locked {
-            ui.horizontal(|ui| {
-                let drag = ui.add(egui::Label::new("⠿ Drag").sense(egui::Sense::drag()));
-                if drag.dragged() {
-                    let mut current = state.write().expect("popout state lock");
-                    let pos = current.position() + drag.drag_delta();
-                    current.set_position(pos);
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
-                }
-                if drag.drag_stopped() {
-                    state.read().expect("popout state lock").save(store);
-                }
-
-                if ui.button("Lock").clicked() {
-                    let mut current = state.write().expect("popout state lock");
-                    current.locked = true;
-                    current.save(store);
-                }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 if ui.button("Close").clicked() {
                     let mut current = state.write().expect("popout state lock");
                     current.open = false;
@@ -216,18 +217,47 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 }
+                if ui.button("Lock").clicked() {
+                    let mut current = state.write().expect("popout state lock");
+                    current.locked = true;
+                    current.save(store);
+                }
             });
         }
 
         ui.vertical_centered(|ui| {
             let now = Local::now();
             ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(format_time(&now, &settings))
-                    .size(40.0)
-                    .monospace(),
+            let sense = if locked {
+                egui::Sense::hover()
+            } else {
+                egui::Sense::drag()
+            };
+            let time = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format_time(&now, &settings))
+                        .size(40.0)
+                        .monospace(),
+                )
+                .sense(sense),
             );
-            ui.label(egui::RichText::new(format_date(&now)).size(14.0));
+            let date = ui.add(
+                egui::Label::new(egui::RichText::new(format_date(&now)).size(14.0)).sense(sense),
+            );
+            if !locked {
+                move_from_drag(
+                    ui,
+                    state,
+                    store,
+                    time.on_hover_cursor(egui::CursorIcon::Grab),
+                );
+                move_from_drag(
+                    ui,
+                    state,
+                    store,
+                    date.on_hover_cursor(egui::CursorIcon::Grab),
+                );
+            }
             ui.ctx()
                 .request_repaint_after(until_next_tick(&now, settings.show_seconds));
         });
