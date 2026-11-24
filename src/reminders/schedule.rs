@@ -1,6 +1,6 @@
 //! Pure date/time rules for reminders, kept out of the UI so they can be tested.
 
-use chrono::{DateTime, Duration, Local, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{DateTime, Duration, Local, NaiveDateTime, NaiveTime};
 
 use super::Repeat;
 
@@ -53,7 +53,7 @@ pub fn format_when(when: &DateTime<Local>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{LocalResult, NaiveDate};
+    use chrono::{LocalResult, NaiveDate, TimeZone};
 
     fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Local> {
         let naive = NaiveDate::from_ymd_opt(year, month, day)

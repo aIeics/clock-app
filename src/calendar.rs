@@ -1,7 +1,7 @@
 //! Month grid with today highlighted, days with reminders marked, and a quick
 //! way to add a reminder to the selected day.
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime, TimeZone};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime};
 use eframe::egui;
 
 use crate::reminders::{Reminders, Repeat};

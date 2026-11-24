@@ -118,12 +118,3 @@ impl eframe::App for ClockApp {
         });
     }
 }
-
-/// Shared placeholder for features that are planned but not built yet.
-pub fn not_built_yet(ui: &mut egui::Ui, feature: &str, phase: &str) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(ui.available_height() * 0.3);
-        ui.heading(feature);
-        ui.label(format!("Not built yet. Planned for {phase} in PLAN.md."));
-    });
-}

@@ -27,6 +27,8 @@ pub struct Countdown {
 }
 
 impl Countdown {
+    /// Used by the tests to set up a specific total before `start`.
+    #[cfg(test)]
     pub fn new(total: Duration) -> Self {
         Self {
             total,
