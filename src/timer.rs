@@ -44,10 +44,6 @@ impl Countdown {
         self.state
     }
 
-    pub fn total(&self) -> Duration {
-        self.total
-    }
-
     /// Time left at `now`, never negative.
     pub fn remaining(&self, now: Instant) -> Duration {
         match self.since {

@@ -45,11 +45,6 @@ pub fn next_occurrence(
     next
 }
 
-/// Short label used in the reminder list.
-pub fn format_when(when: &DateTime<Local>) -> String {
-    when.format("%a %-d %b, %H:%M").to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,10 +123,5 @@ mod tests {
         let now = at(2026, 11, 24, 12, 0);
         assert_eq!(next_occurrence(when, Repeat::Daily, now), when);
         assert_eq!(next_occurrence(when, Repeat::Once, now), when);
-    }
-
-    #[test]
-    fn formats_a_short_label() {
-        assert_eq!(format_when(&at(2026, 11, 25, 9, 5)), "Wed 25 Nov, 09:05");
     }
 }

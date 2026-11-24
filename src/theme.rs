@@ -290,11 +290,7 @@ pub fn button_sized(ui: &mut Ui, text: &str, kind: Kind, min_width: f32) -> Resp
 pub enum Icon {
     ChevronLeft,
     ChevronRight,
-    Play,
-    Pause,
-    Reset,
     Plus,
-    Minus,
     Edit,
     Trash,
     Close,
@@ -371,46 +367,9 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::ChevronRight => {
             painter.line(vec![p(-0.15, -0.35), p(0.15, 0.0), p(-0.15, 0.35)], stroke);
         }
-        Icon::Play => {
-            painter.add(egui::Shape::convex_polygon(
-                vec![p(-0.28, -0.42), p(0.45, 0.0), p(-0.28, 0.42)],
-                color,
-                Stroke::NONE,
-            ));
-        }
-        Icon::Pause => {
-            for x in [-0.2, 0.2] {
-                painter.rect_filled(
-                    Rect::from_center_size(p(x, 0.0), Vec2::new(s * 0.16, s * 0.8)),
-                    s * 0.05,
-                    color,
-                );
-            }
-        }
-        Icon::Reset => {
-            let points: Vec<Pos2> = (0..=20)
-                .map(|i| {
-                    let angle = (-0.15 + i as f32 / 20.0 * 0.78) * TAU;
-                    c + Vec2::angled(angle) * s * 0.38
-                })
-                .collect();
-            let tip = points[0];
-            painter.line(points, stroke);
-            painter.line(
-                vec![
-                    tip + Vec2::new(-0.2, -0.08) * s,
-                    tip,
-                    tip + Vec2::new(0.06, -0.24) * s,
-                ],
-                stroke,
-            );
-        }
         Icon::Plus => {
             painter.line_segment([p(-0.38, 0.0), p(0.38, 0.0)], stroke);
             painter.line_segment([p(0.0, -0.38), p(0.0, 0.38)], stroke);
-        }
-        Icon::Minus => {
-            painter.line_segment([p(-0.38, 0.0), p(0.38, 0.0)], stroke);
         }
         Icon::Close => {
             painter.line_segment([p(-0.3, -0.3), p(0.3, 0.3)], stroke);
@@ -445,57 +404,6 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_filled(p(0.0, 0.42), s * 0.08, color);
         }
     }
-}
-
-/// An animated on/off switch with a label to its right.
-pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), FontId::proportional(14.0), TEXT);
-    let track = Vec2::new(40.0, 22.0);
-    let size = Vec2::new(
-        track.x + 10.0 + galley.size().x,
-        track.y.max(galley.size().y),
-    );
-    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-
-    if ui.is_rect_visible(rect) {
-        let t = ui
-            .ctx()
-            .animate_bool_with_easing(response.id, *on, emath::easing::cubic_out);
-        let hover = ui
-            .ctx()
-            .animate_bool_responsive(response.id.with("hover"), response.hovered());
-        let painter = ui.painter();
-        let track_rect = Rect::from_min_size(
-            Pos2::new(rect.left(), rect.center().y - track.y / 2.0),
-            track,
-        );
-        let r = track.y / 2.0;
-
-        painter.rect_filled(track_rect, r, SURFACE_HI.lerp_to_gamma(TEXT, t));
-        painter.rect_stroke(
-            track_rect,
-            r,
-            Stroke::new(1.0, BORDER.lerp_to_gamma(TEXT_DIM, hover * (1.0 - t))),
-            StrokeKind::Inside,
-        );
-        let knob_x = emath::lerp((track_rect.left() + r)..=(track_rect.right() - r), t);
-        let knob = Pos2::new(knob_x, track_rect.center().y);
-        painter.circle_filled(knob, r - 3.0 + hover, TEXT_DIM.lerp_to_gamma(BG, t));
-
-        let text_pos = Pos2::new(
-            track_rect.right() + 10.0,
-            rect.center().y - galley.size().y / 2.0,
-        );
-        painter.galley(text_pos, galley, TEXT);
-    }
-
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Width of a [`link`] with this text.
