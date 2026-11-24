@@ -30,8 +30,9 @@ const MAX_SIZE: egui::Vec2 = egui::Vec2::new(800.0, 400.0);
 const MENU_WIDTH: f32 = 190.0;
 /// First guess at the menu size, used to keep it on screen before it is measured.
 const MENU_ESTIMATE: egui::Vec2 = egui::Vec2::new(MENU_WIDTH, 230.0);
-const TEXT_COLORS: [(&str, [u8; 4]); 6] = [
+const TEXT_COLORS: [(&str, [u8; 4]); 7] = [
     ("White", [255, 255, 255, 255]),
+    ("Black", [0, 0, 0, 255]),
     ("Amber", [255, 191, 0, 255]),
     ("Green", [0, 255, 128, 255]),
     ("Red", [255, 80, 80, 255]),
