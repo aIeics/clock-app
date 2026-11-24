@@ -1,8 +1,9 @@
+use chrono::Local;
 use eframe::egui;
 
 use crate::calendar::CalendarView;
 use crate::clock::ClockView;
-use crate::reminders::RemindersView;
+use crate::reminders::{Reminders, RemindersView};
 use crate::settings::Settings;
 use crate::storage::Store;
 use crate::timer::TimerView;
@@ -37,7 +38,8 @@ pub struct ClockApp {
     settings: Settings,
     clock: ClockView,
     timer: TimerView,
-    reminders: RemindersView,
+    reminders: Reminders,
+    reminders_view: RemindersView,
     calendar: CalendarView,
 }
 
@@ -45,6 +47,7 @@ impl ClockApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let store = Store::new();
         let settings = Settings::load(&store);
+        let reminders = Reminders::load(&store);
 
         Self {
             tab: Tab::default(),
@@ -52,7 +55,8 @@ impl ClockApp {
             settings,
             clock: ClockView,
             timer: TimerView::default(),
-            reminders: RemindersView::default(),
+            reminders,
+            reminders_view: RemindersView::default(),
             calendar: CalendarView::default(),
         }
     }
@@ -60,9 +64,27 @@ impl ClockApp {
 
 impl eframe::App for ClockApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Called even while the window is hidden, so a timer can finish and
-        // ask for the user's attention without the UI having to run.
+        // Called even while the window is hidden, so timers and reminders can
+        // become due without the UI having to run.
         self.timer.logic(ctx);
+
+        let now = Local::now();
+        let fired = self.reminders.fire_due(now);
+        if !fired.is_empty() {
+            self.reminders.save(&self.store);
+            for item in fired {
+                self.reminders_view.show_fired(item);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Critical,
+            ));
+        }
+
+        // Sleep until the next reminder instead of polling. This also wakes
+        // `logic` while the window is minimized (D3).
+        if let Some(next) = self.reminders.next_due() {
+            ctx.request_repaint_after((next - Local::now()).to_std().unwrap_or_default());
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -83,7 +105,11 @@ impl eframe::App for ClockApp {
                 }
             }
             Tab::Timer => self.timer.ui(ui),
-            Tab::Reminders => self.reminders.ui(ui),
+            Tab::Reminders => {
+                if self.reminders_view.ui(ui, &mut self.reminders) {
+                    self.reminders.save(&self.store);
+                }
+            }
             Tab::Calendar => self.calendar.ui(ui),
         });
     }

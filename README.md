@@ -2,7 +2,7 @@
 
 A lightweight desktop clock app written in Rust: clock, timer, reminders and calendar in one small native window. No web view, no background services, no telemetry.
 
-**Status:** Clock (with saved 12/24-hour and seconds options) and Timer (countdown with start/pause/resume/reset) work. Reminders and Calendar are placeholders. See [`PLAN.md`](PLAN.md) for the roadmap.
+**Status:** Clock (saved 12/24-hour and seconds options), Timer (countdown) and Reminders (create/edit/delete, daily/weekly repeat, saved to disk) work. Calendar is a placeholder. See [`PLAN.md`](PLAN.md) for the roadmap.
 
 ## Run
 
