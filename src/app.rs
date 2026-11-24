@@ -78,6 +78,12 @@ impl ClockApp {
 }
 
 impl eframe::App for ClockApp {
+    /// Transparent so the pop-out can show only its text on the desktop. The
+    /// main window's panels still paint their own backgrounds.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // The window close button hides the app in the tray instead of ending
         // it. "Quit" from the tray menu sets a flag so the close can proceed.

@@ -50,7 +50,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             open: false,
-            locked: false,
+            locked: true,
             position: None,
             size: DEFAULT_SIZE,
             settings: Settings::default(),
@@ -164,7 +164,9 @@ impl Popout {
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
-            .with_always_on_top()
+            .with_transparent(true)
+            .with_has_shadow(false)
+            .with_window_level(egui::viewport::WindowLevel::AlwaysOnBottom)
             .with_position(placement)
             .with_inner_size(size)
             .with_min_inner_size(MIN_SIZE)
@@ -205,6 +207,10 @@ fn resize_window(
             current.set_size(size);
             current.save(store);
         }
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::viewport::WindowLevel::AlwaysOnBottom,
+            ));
     }
 }
 
@@ -238,6 +244,10 @@ fn drag_window(
             current.set_position(pos);
             current.save(store);
         }
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::viewport::WindowLevel::AlwaysOnBottom,
+            ));
     }
 }
 
@@ -252,67 +262,60 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         (current.locked, current.settings.clone())
     };
 
-    let panel = egui::CentralPanel::default().show(ui, |ui| {
-        if !locked {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                if ui.button("Close").clicked() {
-                    close(ui, state, store);
+    let panel = egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                let now = Local::now();
+                ui.add_space(6.0);
+                let sense = if locked {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::drag()
+                };
+                let time = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format_time(&now, &settings))
+                            .size(40.0)
+                            .monospace(),
+                    )
+                    .sense(sense),
+                );
+                let date = ui.add(
+                    egui::Label::new(egui::RichText::new(format_date(&now)).size(14.0))
+                        .sense(sense),
+                );
+                if !locked {
+                    drag_window(
+                        ui,
+                        state,
+                        store,
+                        time.on_hover_cursor(egui::CursorIcon::Grab),
+                    );
+                    drag_window(
+                        ui,
+                        state,
+                        store,
+                        date.on_hover_cursor(egui::CursorIcon::Grab),
+                    );
                 }
-                if ui.button("Lock").clicked() {
-                    set_locked(state, store, true);
-                }
+                ui.ctx()
+                    .request_repaint_after(until_next_tick(&now, settings.show_seconds));
             });
-        }
 
-        ui.vertical_centered(|ui| {
-            let now = Local::now();
-            ui.add_space(6.0);
-            let sense = if locked {
-                egui::Sense::hover()
-            } else {
-                egui::Sense::drag()
-            };
-            let time = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format_time(&now, &settings))
-                        .size(40.0)
-                        .monospace(),
-                )
-                .sense(sense),
-            );
-            let date = ui.add(
-                egui::Label::new(egui::RichText::new(format_date(&now)).size(14.0)).sense(sense),
-            );
             if !locked {
-                drag_window(
-                    ui,
-                    state,
-                    store,
-                    time.on_hover_cursor(egui::CursorIcon::Grab),
-                );
-                drag_window(
-                    ui,
-                    state,
-                    store,
-                    date.on_hover_cursor(egui::CursorIcon::Grab),
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
+                    // Invisible resize corner: only the text is drawn.
+                    let grip = ui.allocate_response(egui::Vec2::splat(16.0), egui::Sense::drag());
+                    resize_window(
+                        ui,
+                        state,
+                        store,
+                        grip.on_hover_cursor(egui::CursorIcon::ResizeNwSe),
+                    );
+                });
             }
-            ui.ctx()
-                .request_repaint_after(until_next_tick(&now, settings.show_seconds));
         });
-
-        if !locked {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
-                let grip = ui.allocate_response(egui::Vec2::splat(16.0), egui::Sense::drag());
-                let rect = grip.rect;
-                ui.painter().line_segment(
-                    [rect.left_bottom(), rect.right_top()],
-                    ui.visuals().widgets.noninteractive.fg_stroke,
-                );
-                resize_window(ui, state, store, grip);
-            });
-        }
-    });
 
     // A container context menu also opens when the click lands on the time or
     // date text, which a plain response-based context menu can miss.
@@ -345,7 +348,7 @@ mod tests {
     fn a_new_popout_is_closed_at_the_default_place() {
         let state = State::default();
         assert!(!state.open);
-        assert!(!state.locked);
+        assert!(state.locked);
         assert_eq!(state.position(), egui::pos2(120.0, 120.0));
         assert_eq!(state.size(), egui::vec2(260.0, 96.0));
     }
