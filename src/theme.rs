@@ -233,11 +233,16 @@ pub enum Kind {
 
 /// A rounded button with hover and press feedback.
 pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
+    button_sized(ui, text, kind, 64.0)
+}
+
+/// A [`button`] at least `min_width` wide.
+pub fn button_sized(ui: &mut Ui, text: &str, kind: Kind, min_width: f32) -> Response {
     let font = FontId::proportional(14.0);
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
-    let size = Vec2::new((galley.size().x + 28.0).max(64.0), 34.0);
+    let size = Vec2::new((galley.size().x + 28.0).max(min_width), 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -472,6 +477,38 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         painter.galley(text_pos, galley, TEXT);
     }
 
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Width of a [`link`] with this text.
+pub fn link_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_string(), FontId::proportional(12.5), TEXT)
+        .size()
+        .x
+}
+
+/// Small underlined text that acts as a button.
+pub fn link(ui: &mut Ui, text: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        FontId::proportional(12.5),
+        Color32::PLACEHOLDER,
+    );
+    let (rect, response) =
+        ui.allocate_exact_size(galley.size() + Vec2::new(0.0, 4.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hover = ui
+            .ctx()
+            .animate_bool_responsive(response.id.with("hover"), response.hovered());
+        let painter = ui.painter();
+        let y = rect.top() + galley.size().y + 1.0;
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            Stroke::new(1.0, BORDER.lerp_to_gamma(TEXT, hover)),
+        );
+        painter.galley(rect.min, galley, TEXT);
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

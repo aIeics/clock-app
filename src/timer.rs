@@ -1,10 +1,8 @@
 use std::time::{Duration, Instant};
 
-use std::f32::consts::TAU;
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
-use eframe::egui::{self, FontId, Pos2, Stroke, Vec2};
-
-use crate::theme::{self, Icon};
+use crate::theme::{self, Kind};
 
 /// Where a countdown is in its lifecycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,175 +168,146 @@ impl TimerView {
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let state = self.countdown.state();
-        let now = Instant::now();
         let editable = matches!(state, State::Idle | State::Finished);
+        // Round up, so a fresh 5:00 timer shows 5:00 rather than 4:59.
+        let left = Duration::from_secs(
+            self.countdown
+                .remaining(Instant::now())
+                .as_millis()
+                .div_ceil(1000) as u64,
+        );
 
-        // While idle, show the time that Start would count down from.
-        let (shown, fraction) = match state {
-            State::Idle => (self.total(), 1.0),
-            _ => {
-                let left = self.countdown.remaining(now);
-                let total = self.countdown.total();
-                let fraction = if total.is_zero() {
-                    0.0
-                } else {
-                    (left.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
-                };
-                (left, fraction)
-            }
+        // While a countdown is going, the wheels roll down to show what's left.
+        let shown = if editable {
+            [self.hours, self.minutes, self.seconds]
+        } else {
+            let secs = left.as_secs();
+            [
+                (secs / 3600) as u32,
+                ((secs / 60) % 60) as u32,
+                (secs % 60) as u32,
+            ]
         };
-        // Glide the ring on start, reset and finish. While running it follows
-        // the clock directly, at the repaint rate `logic` already schedules.
-        let glide = if state == State::Running { 0.0 } else { 0.45 };
-        let fraction =
-            ui.ctx()
-                .animate_value_with_time(egui::Id::unique("timer-ring"), fraction, glide);
 
         let avail = ui.available_size();
-        let diameter = (avail.x * 0.75).min(avail.y - 250.0).clamp(120.0, 400.0);
+        let row = (avail.y * 0.075).clamp(30.0, 52.0);
+        let gap = 10.0;
+        let wheel_w = (row * 2.3).min((avail.x - gap * 2.0) / 3.0);
+        let total_w = wheel_w * 3.0 + gap * 2.0;
+        let content_h = row * 5.0 + 150.0;
+        ui.add_space(((avail.y - content_h) * 0.4).max(8.0));
 
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(((avail.y - diameter - 240.0) * 0.4).max(4.0));
-                    self.ring(ui, diameter, fraction, shown, state);
-                    ui.add_space(16.0);
-
-                    ui.add_enabled_ui(editable, |ui| {
-                        self.presets(ui);
-                        ui.add_space(4.0);
-                        self.steppers(ui);
-                    });
-                    ui.add_space(16.0);
-                    self.controls(ui, state);
-                    ui.add_space(8.0);
-                });
-            });
-    }
-
-    /// The countdown ring with the time and state in the middle.
-    fn ring(&self, ui: &mut egui::Ui, diameter: f32, fraction: f32, shown: Duration, state: State) {
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(diameter), egui::Sense::hover());
-        let painter = ui.painter();
-        let center = rect.center();
-        let width = (diameter * 0.035).clamp(5.0, 12.0);
-        let radius = diameter / 2.0 - width;
-        let finished = state == State::Finished;
-
-        let track = if finished {
-            theme::DANGER.gamma_multiply(0.6)
-        } else {
-            theme::SURFACE_HI
-        };
-        painter.circle_stroke(center, radius, Stroke::new(width, track));
-
-        if fraction > 0.001 {
-            const STEPS: usize = 180;
-            let steps = ((STEPS as f32 * fraction).ceil() as usize).max(2);
-            let at = |turn: f32| center + Vec2::angled(turn * TAU - TAU / 4.0) * radius;
-            let points: Vec<Pos2> = (0..=steps)
-                .map(|i| at(fraction * i as f32 / steps as f32))
-                .collect();
-            painter.circle_filled(points[0], width / 2.0, theme::TEXT);
-            painter.circle_filled(points[steps], width / 2.0, theme::TEXT);
-            painter.line(points, Stroke::new(width, theme::TEXT));
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(total_w, row * 5.0), Sense::hover());
+        for y in [rect.center().y - row / 2.0, rect.center().y + row / 2.0] {
+            ui.painter().line_segment(
+                [
+                    Pos2::new(rect.left() - 8.0, y),
+                    Pos2::new(rect.right() + 8.0, y),
+                ],
+                Stroke::new(1.0, Color32::from_rgb(58, 58, 58)),
+            );
+        }
+        let values = [&mut self.hours, &mut self.minutes, &mut self.seconds];
+        let names = ["HOURS", "MIN", "SEC"];
+        let maxes = [99, 59, 59];
+        for (i, value) in values.into_iter().enumerate() {
+            let wheel_rect = Rect::from_min_size(
+                rect.min + Vec2::new(i as f32 * (wheel_w + gap), 0.0),
+                Vec2::new(wheel_w, rect.height()),
+            );
+            wheel(
+                ui,
+                wheel_rect,
+                egui::Id::unique(("timer-wheel", i)),
+                value,
+                shown[i],
+                maxes[i],
+                editable,
+            );
         }
 
-        // A one-shot pop when the timer finishes; it settles and stays still.
-        let pop = ui.ctx().animate_bool_with_time_and_easing(
-            egui::Id::unique("timer-finished"),
-            finished,
-            0.4,
-            egui::emath::easing::back_out,
-        );
-        let size = (diameter * 0.2).clamp(30.0, 80.0) * (1.0 + 0.06 * pop);
-        let color = if finished { theme::DANGER } else { theme::TEXT };
-        theme::tabular_text(
-            painter,
-            center - Vec2::new(0.0, size * 0.12),
-            &format_duration(shown),
-            FontId::proportional(size),
-            color,
-        );
-        let label = match state {
-            State::Idle => "READY",
-            State::Running => "RUNNING",
-            State::Paused => "PAUSED",
-            State::Finished => "TIME\u{2019}S UP",
+        // Labels under the wheels.
+        let (labels, _) = ui.allocate_exact_size(Vec2::new(total_w, 16.0), Sense::hover());
+        for (i, name) in names.iter().enumerate() {
+            ui.painter().text(
+                Pos2::new(
+                    labels.left() + i as f32 * (wheel_w + gap) + wheel_w / 2.0,
+                    labels.center().y,
+                ),
+                egui::Align2::CENTER_CENTER,
+                *name,
+                FontId::proportional(10.0),
+                theme::TEXT_DIM,
+            );
+        }
+
+        ui.add_space(6.0);
+        let (caption, color) = match state {
+            State::Idle => ("Scroll or drag to set".to_string(), theme::TEXT_DIM),
+            State::Running => (format!("{} left", format_duration(left)), theme::TEXT_DIM),
+            State::Paused => (
+                format!("Paused \u{00b7} {} left", format_duration(left)),
+                theme::TEXT_DIM,
+            ),
+            State::Finished => ("Time\u{2019}s up!".to_string(), theme::DANGER),
         };
-        painter.text(
-            center + Vec2::new(0.0, size * 0.62),
-            egui::Align2::CENTER_CENTER,
-            label,
-            FontId::proportional((size * 0.2).clamp(11.0, 16.0)),
-            if finished {
-                theme::DANGER
-            } else {
-                theme::TEXT_DIM
-            },
-        );
-    }
+        ui.label(egui::RichText::new(caption).size(13.0).color(color));
+        ui.add_space(4.0);
 
-    /// Quick picks for common lengths.
-    fn presets(&mut self, ui: &mut egui::Ui) {
-        const PRESETS: [(&str, u32); 4] =
-            [("1 min", 1), ("5 min", 5), ("10 min", 10), ("25 min", 25)];
-        let spacing = ui.spacing().item_spacing.x;
-        let width = 4.0 * 72.0 + 3.0 * spacing;
-        centered_row(ui, width, |ui| {
-            for (label, minutes) in PRESETS {
-                if theme::button(ui, label, theme::Kind::Ghost).clicked() {
-                    (self.hours, self.minutes, self.seconds) = (0, minutes, 0);
-                }
-            }
-        });
-    }
-
-    /// Hours, minutes and seconds, each with + and - buttons.
-    fn steppers(&mut self, ui: &mut egui::Ui) {
-        theme::card()
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.columns(3, |columns| {
-                    stepper(&mut columns[0], "Hours", &mut self.hours, 99);
-                    stepper(&mut columns[1], "Minutes", &mut self.minutes, 59);
-                    stepper(&mut columns[2], "Seconds", &mut self.seconds, 59);
-                });
-            });
-    }
-
-    /// Start/pause/resume as one big round button, with reset beside it.
-    fn controls(&mut self, ui: &mut egui::Ui, state: State) {
+        let label = match state {
+            State::Idle | State::Finished => "Start",
+            State::Running => "Pause",
+            State::Paused => "Resume",
+        };
         let resettable = state != State::Idle;
         let spacing = ui.spacing().item_spacing.x;
         let width = if resettable {
-            64.0 + spacing + 48.0
+            160.0 + spacing + 90.0
         } else {
-            64.0
+            160.0
         };
         centered_row(ui, width, |ui| {
-            let icon = if state == State::Running {
-                Icon::Pause
-            } else {
-                Icon::Play
-            };
-            if theme::icon_button(ui, icon, 64.0, true).clicked() {
+            if theme::button_sized(ui, label, Kind::Primary, 160.0).clicked() {
                 let now = Instant::now();
                 match state {
                     State::Idle | State::Finished => {
-                        self.countdown.start(self.total(), now);
-                        self.alert_sent = false;
+                        let total = self.total();
+                        if !total.is_zero() {
+                            self.countdown.start(total, now);
+                            self.alert_sent = false;
+                        }
                     }
                     State::Running => self.countdown.pause(now),
                     State::Paused => self.countdown.resume(now),
                 }
             }
-            if resettable && theme::icon_button(ui, Icon::Reset, 48.0, false).clicked() {
+            if resettable && theme::button_sized(ui, "Reset", Kind::Ghost, 90.0).clicked() {
                 self.countdown.reset();
                 self.alert_sent = false;
             }
         });
+
+        if editable {
+            ui.add_space(6.0);
+            const QUICK: [(&str, u32); 3] = [("5 min", 5), ("10 min", 10), ("25 min", 25)];
+            let widths: f32 = QUICK
+                .iter()
+                .map(|(text, _)| theme::link_width(ui, text) + spacing)
+                .sum();
+            let lead = theme::link_width(ui, "Quick:");
+            centered_row(ui, lead + widths, |ui| {
+                ui.label(
+                    egui::RichText::new("Quick:")
+                        .size(12.5)
+                        .color(theme::TEXT_DIM),
+                );
+                for (text, minutes) in QUICK {
+                    if theme::link(ui, text).clicked() {
+                        (self.hours, self.minutes, self.seconds) = (0, minutes, 0);
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -350,33 +319,98 @@ fn centered_row(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) 
     });
 }
 
-/// One column of the duration picker: the label above a `- 05 +` row.
-fn stepper(ui: &mut egui::Ui, label: &str, value: &mut u32, max: u32) {
-    ui.vertical_centered(|ui| {
-        theme::section_label(ui, label);
-        let spacing = ui.spacing().item_spacing.x;
-        centered_row(ui, 26.0 * 2.0 + 30.0 + spacing * 2.0, |ui| {
-            if theme::icon_button(ui, Icon::Minus, 26.0, false).clicked() {
-                *value = if *value == 0 { max } else { *value - 1 };
+/// One scroll wheel: five rows visible, the middle one is the value.
+/// Drag, scroll or click a row to change it while `editable`; otherwise it
+/// shows `shown` and rolls to each new value.
+fn wheel(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: egui::Id,
+    value: &mut u32,
+    shown: u32,
+    max: u32,
+    editable: bool,
+) {
+    let row = rect.height() / 5.0;
+    let sense = if editable {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let response = ui.interact(rect, id, sense);
+    let drag_id = id.with("drag");
+    let mut drag: f32 = ui.ctx().data(|data| data.get_temp(drag_id).unwrap_or(0.0));
+
+    if editable {
+        let step = |value: &mut u32, delta: i64| {
+            *value = (i64::from(*value) + delta).clamp(0, i64::from(max)) as u32;
+        };
+        if response.dragged() {
+            drag -= response.drag_delta().y / row;
+            while drag >= 0.5 {
+                step(value, 1);
+                drag -= 1.0;
             }
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(30.0, 26.0), egui::Sense::hover());
-            let color = if ui.is_enabled() {
-                theme::TEXT
-            } else {
-                theme::TEXT_DIM
-            };
-            theme::tabular_text(
-                ui.painter(),
-                rect.center(),
-                &format!("{value:02}"),
-                FontId::proportional(20.0),
-                color,
-            );
-            if theme::icon_button(ui, Icon::Plus, 26.0, false).clicked() {
-                *value = if *value >= max { 0 } else { *value + 1 };
+            while drag <= -0.5 {
+                step(value, -1);
+                drag += 1.0;
             }
-        });
-    });
+            // Stop the pull at either end.
+            if (*value == 0 && drag < 0.0) || (*value == max && drag > 0.0) {
+                drag = 0.0;
+            }
+        } else {
+            drag = 0.0;
+        }
+        if response.hovered() {
+            let notches: i64 = ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::MouseWheel { delta, .. } if delta.y != 0.0 => {
+                            Some(if delta.y > 0.0 { -1 } else { 1 })
+                        }
+                        _ => None,
+                    })
+                    .sum()
+            });
+            step(value, notches);
+        }
+        if response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            step(value, ((pos.y - rect.center().y) / row).round() as i64);
+        }
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(drag_id, drag));
+
+    let target = if editable { *value } else { shown };
+    let mut pos = theme::animate(ui.ctx(), id.with("pos"), target as f32, 0.25);
+    if response.dragged() {
+        pos = target as f32 + drag;
+    }
+
+    let painter = ui.painter().with_clip_rect(rect);
+    let first = (pos.floor() as i64 - 3).max(0);
+    let last = (pos.ceil() as i64 + 3).min(i64::from(max));
+    for i in first..=last {
+        let offset = i as f32 - pos;
+        let distance = offset.abs();
+        let opacity = (1.0 - distance * 0.38).max(0.12);
+        let scale = (1.0 - distance * 0.08).max(0.78);
+        painter.text(
+            Pos2::new(rect.center().x, rect.center().y + offset * row),
+            egui::Align2::CENTER_CENTER,
+            format!("{i:02}"),
+            FontId::proportional(row * 0.72 * scale),
+            theme::TEXT.gamma_multiply(opacity),
+        );
+    }
+
+    if editable {
+        response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    }
 }
 
 #[cfg(test)]
