@@ -339,6 +339,24 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, diameter: f32, primary: bool) -> Res
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// An icon with no background: dim, turning white on hover.
+pub fn icon_plain(ui: &mut Ui, icon: Icon, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hover = ui
+            .ctx()
+            .animate_bool_responsive(response.id.with("hover"), response.hovered());
+        let glyph = Rect::from_center_size(rect.center(), Vec2::splat(size * 0.55));
+        paint_icon(
+            ui.painter(),
+            glyph,
+            icon,
+            TEXT_DIM.lerp_to_gamma(TEXT, hover),
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Draws a simple line icon inside `rect`.
 pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     let s = rect.width();

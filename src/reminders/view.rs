@@ -1,7 +1,7 @@
 //! The Reminders tab: a small form above a scrollable list.
 
-use chrono::Local;
-use eframe::egui::{self, Sense, Stroke, Vec2};
+use chrono::{Datelike, Local, NaiveDate};
+use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
 
 use super::schedule;
 use super::{Fired, Reminder, Reminders, Repeat};
@@ -17,6 +17,8 @@ pub struct RemindersView {
     editing: Option<u64>,
     error: Option<String>,
     banner: Option<Fired>,
+    sheet_open: bool,
+    focus_title: bool,
 }
 
 impl RemindersView {
@@ -71,18 +73,40 @@ impl RemindersView {
     /// Draws the tab. Returns `true` if the caller should save the reminders.
     pub fn ui(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
         let mut changed = false;
+        let column = ui.max_rect();
+
+        self.banner(ui);
+        let width = ui.available_width();
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, 34.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new("Upcoming")
+                        .size(18.0)
+                        .color(theme::TEXT),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::icon_button(ui, Icon::Plus, 32.0, true)
+                        .on_hover_text("New reminder")
+                        .clicked()
+                    {
+                        self.open_sheet(None);
+                    }
+                });
+            },
+        );
+        ui.add_space(6.0);
 
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                ui.add_space(4.0);
-                self.banner(ui);
-                changed |= self.form(ui, reminders);
-                ui.add_space(10.0);
-                changed |= self.list(ui, reminders);
-                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    changed |= self.timeline(ui, reminders);
+                });
             });
 
+        changed |= self.sheet(ui, column, reminders);
         changed
     }
 
@@ -130,139 +154,269 @@ impl RemindersView {
         }
     }
 
-    /// The form for a new reminder, or the one being edited.
-    fn form(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
-        let mut changed = false;
-        theme::card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered(|ui| {
-                let heading = if self.editing.is_some() {
-                    "Edit reminder"
-                } else {
-                    "New reminder"
-                };
-                theme::section_label(ui, heading);
-
-                let width = ui.available_width();
-                theme::text_field(ui, &mut self.title, "What to remember", width);
-                ui.columns(2, |columns| {
-                    let width = columns[0].available_width();
-                    theme::text_field(
-                        &mut columns[0],
-                        &mut self.when_text,
-                        "YYYY-MM-DD HH:MM",
-                        width,
-                    );
-                    theme::text_field(&mut columns[1], &mut self.note, "Note (optional)", width);
-                });
-                theme::segmented(
-                    ui,
-                    egui::Id::unique("reminders-repeat"),
-                    &mut self.repeat,
-                    &REPEATS,
-                    Vec2::new(width, 32.0),
-                    8.0,
-                );
-
-                ui.add_space(4.0);
-                let editing = self.editing.is_some();
-                let spacing = ui.spacing().item_spacing.x;
-                let row = if editing { 64.0 * 2.0 + spacing } else { 64.0 };
-                let mut submit = false;
-                let mut cancel = false;
-                ui.horizontal(|ui| {
-                    ui.add_space(((ui.available_width() - row) / 2.0).max(0.0));
-                    let label = if editing { "Save" } else { "Add" };
-                    submit = theme::button(ui, label, Kind::Primary).clicked();
-                    if editing {
-                        cancel = theme::button(ui, "Cancel", Kind::Ghost).clicked();
-                    }
-                });
-                if cancel {
-                    self.clear_form();
-                }
-                if submit {
-                    changed |= self.submit(reminders);
-                }
-                if let Some(error) = &self.error {
-                    theme::error_text(ui, error);
-                }
-            });
-        });
-        changed
+    /// Opens the slide-up form, empty or filled with `reminder` for editing.
+    fn open_sheet(&mut self, reminder: Option<&Reminder>) {
+        match reminder {
+            Some(reminder) => self.fill_form(reminder),
+            None => self.clear_form(),
+        }
+        self.sheet_open = true;
+        self.focus_title = true;
     }
 
-    /// Every reminder as a row with edit and delete buttons.
-    fn list(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
+    /// Reminders on a vertical line, grouped by day.
+    fn timeline(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
         let mut changed = false;
-        // Clone the rows first: editing or deleting needs a mutable borrow of
-        // `reminders` while we draw them.
-        let rows: Vec<Reminder> = reminders.items().to_vec();
-        theme::section_label(ui, &format!("Upcoming \u{00b7} {}", rows.len()));
+        let mut rows: Vec<Reminder> = reminders.items().to_vec();
+        rows.sort_by_key(|reminder| reminder.when);
 
         if rows.is_empty() {
-            ui.add_space(16.0);
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::hover());
-            theme::paint_icon(ui.painter(), rect, Icon::Bell, theme::TEXT_DIM);
-            ui.label(egui::RichText::new("No reminders yet.").color(theme::TEXT_DIM));
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::hover());
+                theme::paint_icon(ui.painter(), rect, Icon::Bell, theme::TEXT_DIM);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("No reminders yet.").color(theme::TEXT));
+                ui.label(egui::RichText::new("Press + to add one.").color(theme::TEXT_DIM));
+            });
             return false;
         }
 
-        for reminder in rows {
-            let editing = self.editing == Some(reminder.id);
-            let border = if editing { theme::TEXT } else { theme::BORDER };
-            theme::card()
-                .stroke(Stroke::new(1.0, border))
-                .inner_margin(egui::Margin::symmetric(14, 10))
-                .corner_radius(12)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 3.0;
+        let today = Local::now().date_naive();
+        let mut index = 0;
+        while index < rows.len() {
+            let day = rows[index].when.date_naive();
+            let group: Vec<Reminder> = rows[index..]
+                .iter()
+                .take_while(|reminder| reminder.when.date_naive() == day)
+                .cloned()
+                .collect();
+            index += group.len();
+
+            theme::section_label(ui, &day_label(day, today));
+            let left = ui.cursor().left();
+            let top = ui.cursor().top();
+            let mut dots = Vec::new();
+            for reminder in group {
+                let editing = self.editing == Some(reminder.id);
+                let row = ui.horizontal(|ui| {
+                    ui.add_space(22.0);
+                    let (time_rect, _) =
+                        ui.allocate_exact_size(Vec2::new(44.0, 18.0), Sense::hover());
+                    ui.painter().text(
+                        time_rect.left_center(),
+                        egui::Align2::LEFT_CENTER,
+                        reminder.when.format("%H:%M").to_string(),
+                        egui::FontId::proportional(12.5),
+                        theme::TEXT_DIM,
+                    );
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let title = egui::RichText::new(&reminder.title).size(14.5);
+                        ui.label(if editing {
+                            title.color(theme::TEXT).underline()
+                        } else {
+                            title.color(theme::TEXT)
+                        });
+                        if reminder.repeat != Repeat::Once {
                             ui.label(
-                                egui::RichText::new(&reminder.title)
-                                    .color(theme::TEXT)
-                                    .size(15.0)
-                                    .strong(),
+                                egui::RichText::new(reminder.repeat.label())
+                                    .size(11.5)
+                                    .color(theme::TEXT_DIM),
                             );
-                            let mut when = schedule::format_when(&reminder.when);
-                            if reminder.repeat != Repeat::Once {
-                                when.push_str(" \u{00b7} ");
-                                when.push_str(reminder.repeat.label());
+                        }
+                        if !reminder.note.is_empty() {
+                            ui.label(
+                                egui::RichText::new(&reminder.note)
+                                    .size(11.5)
+                                    .italics()
+                                    .color(theme::TEXT_DIM),
+                            );
+                        }
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if theme::icon_plain(ui, Icon::Trash, 24.0)
+                            .on_hover_text("Delete")
+                            .clicked()
+                        {
+                            reminders.remove(reminder.id);
+                            changed = true;
+                            if editing {
+                                self.clear_form();
+                                self.sheet_open = false;
                             }
-                            ui.label(egui::RichText::new(when).color(theme::TEXT_DIM).size(12.5));
-                            if !reminder.note.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(&reminder.note)
-                                        .color(theme::TEXT_DIM)
-                                        .size(12.5)
-                                        .italics(),
-                                );
-                            }
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if theme::icon_button(ui, Icon::Trash, 30.0, false)
-                                .on_hover_text("Delete")
-                                .clicked()
-                            {
-                                reminders.remove(reminder.id);
-                                changed = true;
-                                if editing {
-                                    self.clear_form();
-                                }
-                            }
-                            if theme::icon_button(ui, Icon::Edit, 30.0, false)
-                                .on_hover_text("Edit")
-                                .clicked()
-                            {
-                                self.fill_form(&reminder);
-                            }
-                        });
+                        }
+                        if theme::icon_plain(ui, Icon::Edit, 24.0)
+                            .on_hover_text("Edit")
+                            .clicked()
+                        {
+                            self.open_sheet(Some(&reminder));
+                        }
                     });
                 });
+                dots.push(Pos2::new(left + 4.5, row.response.rect.top() + 9.0));
+                ui.add_space(6.0);
+            }
+
+            // The line and its dots, drawn behind the rows' text.
+            let bottom = ui.cursor().top() - 6.0;
+            let painter = ui.painter();
+            painter.line_segment(
+                [Pos2::new(left + 4.5, top), Pos2::new(left + 4.5, bottom)],
+                Stroke::new(1.0, Color32::from_rgb(42, 42, 42)),
+            );
+            for dot in dots {
+                painter.circle(dot, 4.0, theme::BG, Stroke::new(1.0, theme::TEXT));
+            }
+            ui.add_space(10.0);
+        }
+
+        changed
+    }
+
+    /// The form that slides up from the bottom of the window.
+    fn sheet(&mut self, ui: &mut egui::Ui, column: egui::Rect, reminders: &mut Reminders) -> bool {
+        let ctx = ui.ctx().clone();
+        let shown = ctx.animate_bool_with_time_and_easing(
+            egui::Id::unique("reminders-sheet"),
+            self.sheet_open,
+            0.3,
+            egui::emath::easing::cubic_out,
+        );
+        if shown == 0.0 {
+            return false;
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.sheet_open = false;
+        }
+
+        // Dim everything behind the sheet; a click there closes it.
+        let screen = ctx.content_rect();
+        let dismissed = egui::Area::new(egui::Id::unique("reminders-sheet-backdrop"))
+            .order(egui::Order::Middle)
+            .movable(false)
+            .fixed_pos(screen.min)
+            .show(&ctx, |ui| {
+                let (rect, response) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    Color32::from_black_alpha((160.0 * shown) as u8),
+                );
+                response.clicked()
+            })
+            .inner;
+        if dismissed {
+            self.sheet_open = false;
+        }
+
+        let height_id = egui::Id::unique("reminders-sheet-height");
+        let height: f32 = ctx.data(|data| data.get_temp(height_id).unwrap_or(280.0));
+        let pos = Pos2::new(
+            column.left(),
+            screen.bottom() + (1.0 - shown) * (height + 8.0),
+        );
+        let mut changed = false;
+        let sheet = egui::Area::new(egui::Id::unique("reminders-sheet-area"))
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .constrain(false)
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(pos)
+            .show(&ctx, |ui| {
+                ui.set_width(column.width());
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(12, 12, 12))
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .inner_margin(egui::Margin::same(16))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        changed = self.form(ui, reminders);
+                    });
+            });
+        ctx.data_mut(|data| data.insert_temp(height_id, sheet.response.rect.height()));
+        changed
+    }
+
+    /// The fields inside the sheet.
+    fn form(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
+        let mut changed = false;
+        let heading = if self.editing.is_some() {
+            "Edit reminder"
+        } else {
+            "New reminder"
+        };
+        theme::section_label(ui, heading);
+
+        let width = ui.available_width();
+        let title = theme::text_field(ui, &mut self.title, "What to remember", width);
+        if self.focus_title {
+            title.request_focus();
+            self.focus_title = false;
+        }
+        ui.columns(2, |columns| {
+            let half = columns[0].available_width();
+            theme::text_field(
+                &mut columns[0],
+                &mut self.when_text,
+                "YYYY-MM-DD HH:MM or HH:MM",
+                half,
+            );
+            theme::text_field(&mut columns[1], &mut self.note, "Note (optional)", half);
+        });
+        theme::segmented(
+            ui,
+            egui::Id::unique("reminders-repeat"),
+            &mut self.repeat,
+            &REPEATS,
+            Vec2::new(width, 30.0),
+            0.0,
+        );
+        if let Some(error) = &self.error {
+            theme::error_text(ui, error);
+        }
+
+        ui.add_space(2.0);
+        let mut save = false;
+        let mut cancel = false;
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, 34.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let label = if self.editing.is_some() {
+                    "Save"
+                } else {
+                    "Add"
+                };
+                save = theme::button(ui, label, Kind::Primary).clicked();
+                cancel = theme::button(ui, "Cancel", Kind::Ghost).clicked();
+            },
+        );
+        save |= title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+
+        if cancel {
+            self.clear_form();
+            self.sheet_open = false;
+        }
+        if save {
+            changed = self.submit(reminders);
+            if self.error.is_none() {
+                self.sheet_open = false;
+            }
         }
         changed
+    }
+}
+
+/// "Today", "Tomorrow", a weekday name within the next week, or a date.
+fn day_label(day: NaiveDate, today: NaiveDate) -> String {
+    match (day - today).num_days() {
+        0 => "Today".to_string(),
+        1 => "Tomorrow".to_string(),
+        -1 => "Yesterday".to_string(),
+        2..=6 => day.format("%A").to_string(),
+        _ if day.year() == today.year() => day.format("%a %-d %B").to_string(),
+        _ => day.format("%a %-d %B %Y").to_string(),
     }
 }
 
@@ -286,6 +440,21 @@ mod tests {
             LocalResult::Single(time) => time,
             other => panic!("test time is not unambiguous here: {other:?}"),
         }
+    }
+
+    #[test]
+    fn day_labels_read_naturally() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 25).unwrap();
+        let day = |m, d| NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+        assert_eq!(day_label(today, today), "Today");
+        assert_eq!(day_label(day(11, 26), today), "Tomorrow");
+        assert_eq!(day_label(day(11, 24), today), "Yesterday");
+        assert_eq!(day_label(day(11, 28), today), "Saturday");
+        assert_eq!(day_label(day(12, 9), today), "Wed 9 December");
+        assert_eq!(
+            day_label(NaiveDate::from_ymd_opt(2027, 1, 4).unwrap(), today),
+            "Mon 4 January 2027"
+        );
     }
 
     #[test]
