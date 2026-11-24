@@ -77,6 +77,13 @@ struct State {
     /// Screen position of the open right-click menu, in points.
     #[serde(skip)]
     menu: Option<[f32; 2]>,
+    /// The hidden menu window has painted at least one frame, so it is safe to
+    /// show without revealing an unpainted (white/bordered) native window.
+    #[serde(skip)]
+    menu_ready: bool,
+    /// Whether the menu window is currently requested to be visible.
+    #[serde(skip)]
+    menu_shown: bool,
     /// The menu window has had focus, so losing it now means "clicked away".
     #[serde(skip)]
     menu_focused: bool,
@@ -98,6 +105,8 @@ impl Default for State {
             resizing: false,
             initialized: false,
             menu: None,
+            menu_ready: false,
+            menu_shown: false,
             menu_focused: false,
         }
     }
@@ -264,6 +273,9 @@ fn close(ctx: &egui::Context, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     current.resizing = false;
     current.initialized = false;
     current.menu = None;
+    current.menu_ready = false;
+    current.menu_shown = false;
+    current.menu_focused = false;
     current.save(store);
     drop(current);
     ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
@@ -302,8 +314,11 @@ fn open_menu(ctx: &egui::Context, state: &Arc<RwLock<State>>, at: egui::Pos2) {
     current.menu = Some([at.x, at.y]);
     current.menu_focused = false;
     drop(current);
+    // The menu window stays alive but hidden. Its next paint either marks it
+    // ready or, if it already is, lets the pop-out pass show and move it.
+    ctx.request_repaint_of(menu_viewport_id());
+    ctx.request_repaint_of(viewport_id());
     if already_open {
-        // A new builder position moves it; it also needs the focus back.
         ctx.send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Focus);
     }
 }
@@ -312,8 +327,12 @@ fn close_menu(ctx: &egui::Context, state: &Arc<RwLock<State>>) {
     let mut current = state.write().expect("popout state lock");
     current.menu = None;
     current.menu_focused = false;
+    let was_shown = current.menu_shown;
+    current.menu_shown = false;
     drop(current);
-    // The pop-out's next pass stops showing the menu viewport, which closes it.
+    if was_shown {
+        ctx.send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Visible(false));
+    }
     ctx.request_repaint_of(viewport_id());
 }
 
@@ -331,23 +350,27 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
         )
     });
 
-    let (locked, font, color) = {
+    let (locked, font, color, open, was_ready) = {
         let mut current = state.write().expect("popout state lock");
-        if current.menu.is_none() {
-            return;
-        }
-        // Close on click-away, but only once it has had focus: a new window
-        // is not focused yet on its first pass.
-        let clicked_away = focused == Some(false) && current.menu_focused;
-        if focused == Some(true) {
+        let open = current.menu.is_some();
+        // Close on click-away, but only while the menu is shown and once it has
+        // had focus: a newly shown window is not focused on its first pass.
+        let clicked_away = open && focused == Some(false) && current.menu_focused;
+        if open && focused == Some(true) {
             current.menu_focused = true;
         }
-        if clicked_away || close_requested || escape {
+        if open && (clicked_away || close_requested || escape) {
             drop(current);
             close_menu(&ctx, state);
             return;
         }
-        (current.locked, current.font, current.text_color)
+        (
+            current.locked,
+            current.font,
+            current.text_color,
+            open,
+            current.menu_ready,
+        )
     };
 
     let frame = egui::Frame::menu(ui.style()).corner_radius(0);
@@ -401,6 +424,15 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
     let off = |size: egui::Vec2| (size.x - wanted.x).abs() > 1.0 || (size.y - wanted.y).abs() > 1.0;
     if inner_size.is_some_and(off) {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted));
+    }
+
+    // This window is created hidden. Once it has actually painted, the pop-out
+    // pass can show it without any white or bordered first frame.
+    if !was_ready {
+        state.write().expect("popout state lock").menu_ready = true;
+        if open {
+            ctx.request_repaint_of(viewport_id());
+        }
     }
 }
 
@@ -602,29 +634,52 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         open_menu(ui.ctx(), state, menu_position(at, MENU_ESTIMATE, monitor));
     }
 
-    let menu = state.read().expect("popout state lock").menu;
+    let (menu, menu_ready, menu_shown) = {
+        let current = state.read().expect("popout state lock");
+        (current.menu, current.menu_ready, current.menu_shown)
+    };
+
+    // Keep the menu window alive from the pop-out's first frame, but hidden.
+    // Creating a native window on the right-click itself is what shows a bare
+    // border for a frame before egui can paint anything. It is also transparent
+    // with no shadow, so nothing is revealed when it is finally shown.
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title("Clock menu")
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_taskbar(false)
+        .with_transparent(true)
+        .with_has_shadow(false)
+        .with_always_on_top()
+        .with_active(false)
+        .with_visible(false)
+        .with_inner_size(MENU_ESTIMATE);
     if let Some([x, y]) = menu {
-        // A new undecorated window would show Windows' white client area until
-        // its first egui frame paints. Make it transparent from creation, and
-        // drop the shadow (which can ghost on transparent windows), so the menu
-        // appears already dark instead of flashing white.
-        let builder = egui::ViewportBuilder::default()
-            .with_title("Clock menu")
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_taskbar(false)
-            .with_transparent(true)
-            .with_has_shadow(false)
-            .with_always_on_top()
-            .with_active(true)
-            .with_position(egui::pos2(x, y))
-            .with_inner_size(MENU_ESTIMATE);
-        let state = Arc::clone(state);
-        let store = Arc::clone(store);
+        builder = builder.with_position(egui::pos2(x, y));
+    }
+    let menu_state = Arc::clone(state);
+    let menu_store = Arc::clone(store);
+    ui.ctx()
+        .show_viewport_deferred(menu_viewport_id(), builder, move |ui, _class| {
+            render_menu(ui, &menu_state, &menu_store);
+        });
+
+    if menu.is_some() {
+        if menu_ready {
+            if !menu_shown {
+                ui.ctx()
+                    .send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Visible(true));
+                ui.ctx()
+                    .send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Focus);
+                state.write().expect("popout state lock").menu_shown = true;
+            }
+        } else {
+            ui.ctx().request_repaint_of(menu_viewport_id());
+        }
+    } else if menu_shown {
         ui.ctx()
-            .show_viewport_deferred(menu_viewport_id(), builder, move |ui, _class| {
-                render_menu(ui, &state, &store);
-            });
+            .send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Visible(false));
+        state.write().expect("popout state lock").menu_shown = false;
     }
 
     // Windows only applies AlwaysOnBottom when the level changes, so reassert it
