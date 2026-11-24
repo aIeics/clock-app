@@ -106,9 +106,21 @@ pub fn apply(ctx: &egui::Context) {
     });
 }
 
-/// Eased value animation. Like `animate_value_with_time` but with a
-/// `cubic_out` curve. Returns `target` the first time an id is seen.
+/// Eased value animation with a `cubic_out` curve. Returns `target` the
+/// first time an id is seen.
 pub fn animate(ctx: &egui::Context, id: Id, target: f32, duration: f32) -> f32 {
+    animate_with(ctx, id, target, duration, emath::easing::cubic_out)
+}
+
+/// Like [`animate`] with any easing curve. A jump of more than 100 (such as a
+/// counter wrapping at midnight) snaps instead of animating.
+pub fn animate_with(
+    ctx: &egui::Context,
+    id: Id,
+    target: f32,
+    duration: f32,
+    easing: fn(f32) -> f32,
+) -> f32 {
     #[derive(Clone, Copy)]
     struct Anim {
         from: f32,
@@ -125,7 +137,11 @@ pub fn animate(ctx: &egui::Context, id: Id, target: f32, duration: f32) -> f32 {
         });
         if anim.to != target {
             let t = ((now - anim.start) as f32 / duration).clamp(0.0, 1.0);
-            anim.from = emath::lerp(anim.from..=anim.to, emath::easing::cubic_out(t));
+            anim.from = if (target - anim.to).abs() > 100.0 {
+                target
+            } else {
+                emath::lerp(anim.from..=anim.to, easing(t))
+            };
             anim.to = target;
             anim.start = now;
         }
@@ -136,7 +152,17 @@ pub fn animate(ctx: &egui::Context, id: Id, target: f32, duration: f32) -> f32 {
     if t < 1.0 {
         ctx.request_repaint();
     }
-    emath::lerp(anim.from..=anim.to, emath::easing::cubic_out(t))
+    emath::lerp(anim.from..=anim.to, easing(t))
+}
+
+/// Progress from 0 to 1 of a one-shot animation that started at `start`
+/// (egui input time). Repaints only until it reaches 1.
+pub fn since(ctx: &egui::Context, start: f64, duration: f32) -> f32 {
+    let t = ((ctx.input(|input| input.time) - start) as f32 / duration).clamp(0.0, 1.0);
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    emath::easing::cubic_out(t)
 }
 
 /// A card: a slightly raised, rounded panel with a thin border.
@@ -446,6 +472,55 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         painter.galley(text_pos, galley, TEXT);
     }
 
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Width of a [`check`] with this label.
+pub fn check_width(ui: &Ui, label: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(label.to_string(), FontId::proportional(13.0), TEXT)
+        .size()
+        .x
+        + 17.0
+}
+
+/// A small square checkbox with a label, filled white when on.
+pub fn check(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        FontId::proportional(13.0),
+        Color32::PLACEHOLDER,
+    );
+    let size = Vec2::new(galley.size().x + 17.0, 28.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool_responsive(response.id, *on);
+        let hover = ui
+            .ctx()
+            .animate_bool_responsive(response.id.with("hover"), response.hovered());
+        let painter = ui.painter();
+        let square = Rect::from_center_size(
+            Pos2::new(rect.left() + 5.0, rect.center().y),
+            Vec2::splat(10.0),
+        );
+        painter.rect_filled(square, 0.0, BG.lerp_to_gamma(TEXT, t));
+        painter.rect_stroke(
+            square,
+            0.0,
+            Stroke::new(1.0, TEXT_DIM.lerp_to_gamma(TEXT, t.max(hover))),
+            StrokeKind::Inside,
+        );
+        let color = TEXT_DIM.lerp_to_gamma(TEXT, t.max(hover));
+        painter.galley(
+            Pos2::new(rect.left() + 17.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+    }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
