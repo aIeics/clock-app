@@ -59,6 +59,12 @@ impl ClockApp {
 }
 
 impl eframe::App for ClockApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Called even while the window is hidden, so a timer can finish and
+        // ask for the user's attention without the UI having to run.
+        self.timer.logic(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.horizontal(|ui| {
