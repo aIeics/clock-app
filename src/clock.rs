@@ -20,9 +20,12 @@ impl ClockView {
         let mut changed = false;
 
         let avail = ui.available_size();
-        let diameter = (avail.x - 40.0).min(avail.y * 0.5).clamp(140.0, 260.0);
+        // Everything scales with the window: the dial takes about half the
+        // height, and the text follows the dial.
+        let diameter = (avail.x * 0.8).min(avail.y * 0.5).clamp(120.0, 440.0);
+        let font_size = (diameter * 0.21).clamp(34.0, 92.0);
 
-        ui.add_space(((avail.y - diameter - 200.0) * 0.3).max(4.0));
+        ui.add_space(((avail.y - diameter - font_size * 3.2 - 80.0) * 0.35).max(4.0));
         let (rect, painter) =
             ui.allocate_painter(Vec2::new(avail.x, diameter + 24.0), egui::Sense::hover());
         paint_dial(&painter, rect.rect.center(), diameter / 2.0, &now, settings);
@@ -33,10 +36,11 @@ impl ClockView {
             Some((main, suffix)) => (main.to_string(), Some(suffix.to_string())),
             None => (text, None),
         };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.x, 60.0), egui::Sense::hover());
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(avail.x, font_size * 1.15), egui::Sense::hover());
         let painter = ui.painter();
-        let big = FontId::proportional(52.0);
-        let small = FontId::proportional(18.0);
+        let big = FontId::proportional(font_size);
+        let small = FontId::proportional(font_size * 0.34);
         let suffix_width = suffix.as_ref().map_or(0.0, |suffix| {
             painter
                 .layout_no_wrap(suffix.clone(), small.clone(), theme::TEXT)
@@ -48,7 +52,10 @@ impl ClockView {
         let width = theme::tabular_text(painter, center, &main, big, theme::TEXT);
         if let Some(suffix) = suffix {
             painter.text(
-                Pos2::new(center.x + width / 2.0 + 8.0, rect.center().y + 10.0),
+                Pos2::new(
+                    center.x + width / 2.0 + 8.0,
+                    rect.center().y + font_size * 0.2,
+                ),
                 egui::Align2::LEFT_BOTTOM,
                 suffix,
                 small,
@@ -59,7 +66,7 @@ impl ClockView {
         ui.vertical_centered(|ui| {
             ui.label(
                 egui::RichText::new(format_date(&now))
-                    .size(15.0)
+                    .size((font_size * 0.3).clamp(14.0, 24.0))
                     .color(theme::TEXT_DIM),
             );
             ui.add_space(18.0);

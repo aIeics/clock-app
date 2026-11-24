@@ -1,6 +1,10 @@
 use std::time::{Duration, Instant};
 
-use eframe::egui;
+use std::f32::consts::TAU;
+
+use eframe::egui::{self, FontId, Pos2, Stroke, Vec2};
+
+use crate::theme::{self, Icon};
 
 /// Where a countdown is in its lifecycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -167,75 +171,201 @@ impl TimerView {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let state = self.countdown.state();
         let now = Instant::now();
-        let left = self.countdown.remaining(now);
-        let total = self.countdown.total();
-        let progress = if total.is_zero() {
-            1.0
-        } else {
-            1.0 - (left.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
-        };
         let editable = matches!(state, State::Idle | State::Finished);
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.08);
-            ui.label(
-                egui::RichText::new(format_duration(left))
-                    .size(56.0)
-                    .monospace(),
-            );
-            ui.add_space(8.0);
-            ui.add(
-                egui::ProgressBar::new(progress)
-                    .desired_width(260.0)
-                    .fill(egui::Color32::from_rgb(59, 130, 246)),
-            );
-            ui.add_space(16.0);
+        // While idle, show the time that Start would count down from.
+        let (shown, fraction) = match state {
+            State::Idle => (self.total(), 1.0),
+            _ => {
+                let left = self.countdown.remaining(now);
+                let total = self.countdown.total();
+                let fraction = if total.is_zero() {
+                    0.0
+                } else {
+                    (left.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
+                };
+                (left, fraction)
+            }
+        };
+        // Glide the ring on start, reset and finish. While running it follows
+        // the clock directly, at the repaint rate `logic` already schedules.
+        let glide = if state == State::Running { 0.0 } else { 0.45 };
+        let fraction = ui
+            .ctx()
+            .animate_value_with_time(ui.id().with("ring"), fraction, glide);
 
-            ui.add_enabled_ui(editable, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Hours");
-                    ui.add(egui::DragValue::new(&mut self.hours).range(0..=99));
-                    ui.label("Minutes");
-                    ui.add(egui::DragValue::new(&mut self.minutes).range(0..=59));
-                    ui.label("Seconds");
-                    ui.add(egui::DragValue::new(&mut self.seconds).range(0..=59));
+        let avail = ui.available_size();
+        let diameter = (avail.x * 0.75).min(avail.y - 330.0).clamp(140.0, 400.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(((avail.y - diameter - 320.0) * 0.4).max(4.0));
+                    self.ring(ui, diameter, fraction, shown, state);
+                    ui.add_space(16.0);
+
+                    ui.add_enabled_ui(editable, |ui| {
+                        self.presets(ui);
+                        ui.add_space(4.0);
+                        self.steppers(ui);
+                    });
+                    ui.add_space(16.0);
+                    self.controls(ui, state);
+                    ui.add_space(8.0);
                 });
             });
+    }
 
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let total = self.total();
-                match state {
-                    State::Idle | State::Finished => {
-                        if ui.button("Start").clicked() {
-                            self.countdown.start(total, Instant::now());
-                            self.alert_sent = false;
-                        }
-                    }
-                    State::Running => {
-                        if ui.button("Pause").clicked() {
-                            self.countdown.pause(Instant::now());
-                        }
-                    }
-                    State::Paused => {
-                        if ui.button("Resume").clicked() {
-                            self.countdown.resume(Instant::now());
-                        }
-                    }
+    /// The countdown ring with the time and state in the middle.
+    fn ring(&self, ui: &mut egui::Ui, diameter: f32, fraction: f32, shown: Duration, state: State) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(diameter), egui::Sense::hover());
+        let painter = ui.painter();
+        let center = rect.center();
+        let width = (diameter * 0.035).clamp(5.0, 12.0);
+        let radius = diameter / 2.0 - width;
+        let finished = state == State::Finished;
+
+        let track = if finished {
+            theme::DANGER.gamma_multiply(0.6)
+        } else {
+            theme::SURFACE_HI
+        };
+        painter.circle_stroke(center, radius, Stroke::new(width, track));
+
+        if fraction > 0.001 {
+            const STEPS: usize = 180;
+            let steps = ((STEPS as f32 * fraction).ceil() as usize).max(2);
+            let at = |turn: f32| center + Vec2::angled(turn * TAU - TAU / 4.0) * radius;
+            let points: Vec<Pos2> = (0..=steps)
+                .map(|i| at(fraction * i as f32 / steps as f32))
+                .collect();
+            painter.circle_filled(points[0], width / 2.0, theme::TEXT);
+            painter.circle_filled(points[steps], width / 2.0, theme::TEXT);
+            painter.line(points, Stroke::new(width, theme::TEXT));
+        }
+
+        // A one-shot pop when the timer finishes; it settles and stays still.
+        let pop = ui.ctx().animate_bool_with_time_and_easing(
+            ui.id().with("finished"),
+            finished,
+            0.4,
+            egui::emath::easing::back_out,
+        );
+        let size = (diameter * 0.2).clamp(30.0, 80.0) * (1.0 + 0.06 * pop);
+        let color = if finished { theme::DANGER } else { theme::TEXT };
+        theme::tabular_text(
+            painter,
+            center - Vec2::new(0.0, size * 0.12),
+            &format_duration(shown),
+            FontId::proportional(size),
+            color,
+        );
+        let label = match state {
+            State::Idle => "READY",
+            State::Running => "RUNNING",
+            State::Paused => "PAUSED",
+            State::Finished => "TIME\u{2019}S UP",
+        };
+        painter.text(
+            center + Vec2::new(0.0, size * 0.62),
+            egui::Align2::CENTER_CENTER,
+            label,
+            FontId::proportional((size * 0.2).clamp(11.0, 16.0)),
+            if finished {
+                theme::DANGER
+            } else {
+                theme::TEXT_DIM
+            },
+        );
+    }
+
+    /// Quick picks for common lengths.
+    fn presets(&mut self, ui: &mut egui::Ui) {
+        const PRESETS: [(&str, u32); 4] =
+            [("1 min", 1), ("5 min", 5), ("10 min", 10), ("25 min", 25)];
+        let spacing = ui.spacing().item_spacing.x;
+        let width = 4.0 * 72.0 + 3.0 * spacing;
+        centered_row(ui, width, |ui| {
+            for (label, minutes) in PRESETS {
+                if theme::button(ui, label, theme::Kind::Ghost).clicked() {
+                    (self.hours, self.minutes, self.seconds) = (0, minutes, 0);
                 }
-
-                if state != State::Idle && ui.button("Reset").clicked() {
-                    self.countdown.reset();
-                    self.alert_sent = false;
-                }
-            });
-
-            if state == State::Finished {
-                ui.add_space(8.0);
-                ui.colored_label(egui::Color32::from_rgb(239, 68, 68), "Time's up!");
             }
         });
     }
+
+    /// Hours, minutes and seconds, each with + and - buttons.
+    fn steppers(&mut self, ui: &mut egui::Ui) {
+        theme::card()
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.columns(3, |columns| {
+                    stepper(&mut columns[0], "Hours", &mut self.hours, 99);
+                    stepper(&mut columns[1], "Minutes", &mut self.minutes, 59);
+                    stepper(&mut columns[2], "Seconds", &mut self.seconds, 59);
+                });
+            });
+    }
+
+    /// Start/pause/resume as one big round button, with reset beside it.
+    fn controls(&mut self, ui: &mut egui::Ui, state: State) {
+        let resettable = state != State::Idle;
+        let spacing = ui.spacing().item_spacing.x;
+        let width = if resettable {
+            64.0 + spacing + 48.0
+        } else {
+            64.0
+        };
+        centered_row(ui, width, |ui| {
+            let icon = if state == State::Running {
+                Icon::Pause
+            } else {
+                Icon::Play
+            };
+            if theme::icon_button(ui, icon, 64.0, true).clicked() {
+                let now = Instant::now();
+                match state {
+                    State::Idle | State::Finished => {
+                        self.countdown.start(self.total(), now);
+                        self.alert_sent = false;
+                    }
+                    State::Running => self.countdown.pause(now),
+                    State::Paused => self.countdown.resume(now),
+                }
+            }
+            if resettable && theme::icon_button(ui, Icon::Reset, 48.0, false).clicked() {
+                self.countdown.reset();
+                self.alert_sent = false;
+            }
+        });
+    }
+}
+
+/// A horizontal row of `width`, centred in the available space.
+fn centered_row(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        add(ui);
+    });
+}
+
+/// One column of the duration picker: label, +, value, -.
+fn stepper(ui: &mut egui::Ui, label: &str, value: &mut u32, max: u32) {
+    ui.vertical_centered(|ui| {
+        theme::section_label(ui, label);
+        if theme::icon_button(ui, Icon::Plus, 30.0, false).clicked() {
+            *value = if *value >= max { 0 } else { *value + 1 };
+        }
+        ui.label(
+            egui::RichText::new(format!("{value:02}"))
+                .size(26.0)
+                .color(theme::TEXT),
+        );
+        if theme::icon_button(ui, Icon::Minus, 30.0, false).clicked() {
+            *value = if *value == 0 { max } else { *value - 1 };
+        }
+    });
 }
 
 #[cfg(test)]

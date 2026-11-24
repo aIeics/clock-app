@@ -22,6 +22,27 @@ pub const DANGER: Color32 = Color32::from_rgb(244, 63, 94);
 
 const RADIUS: u8 = 10;
 
+/// Content never gets wider than this, so wide windows keep a centred column.
+pub const MAX_WIDTH: f32 = 560.0;
+
+/// Runs `add` in a column centred in the remaining space, at most `max_width`
+/// wide, with its widgets centred horizontally.
+pub fn column<R>(ui: &mut Ui, max_width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let avail = ui.available_rect_before_wrap();
+    let width = avail.width().min(max_width);
+    let rect = Rect::from_min_size(
+        Pos2::new(avail.center().x - width / 2.0, avail.top()),
+        Vec2::new(width, avail.height()),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        add,
+    )
+    .inner
+}
+
 /// Installs the style. The theme is forced to dark so the look doesn't
 /// depend on the Windows light/dark setting.
 pub fn apply(ctx: &egui::Context) {
@@ -429,15 +450,16 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
 }
 
 /// A row of options with a white pill that slides to the selected one.
-/// Returns `true` when the selection changed.
+/// `radius` 0 gives square corners. Returns `true` when the selection changed.
 pub fn segmented<T: PartialEq + Copy>(
     ui: &mut Ui,
     id: Id,
     value: &mut T,
     options: &[(T, &str)],
-    width: f32,
-    height: f32,
+    size: Vec2,
+    radius: f32,
 ) -> bool {
+    let (width, height) = (size.x, size.y);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let mut changed = false;
     let count = options.len().max(1) as f32;
@@ -449,7 +471,6 @@ pub fn segmented<T: PartialEq + Copy>(
         .unwrap_or(0);
 
     let painter = ui.painter().clone();
-    let radius = height / 2.0;
     painter.rect_filled(rect, radius, SURFACE);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, BORDER), StrokeKind::Inside);
 
@@ -458,7 +479,7 @@ pub fn segmented<T: PartialEq + Copy>(
         Pos2::new(rect.left() + pad + pos * slot, rect.top() + pad),
         Vec2::new(slot, height - pad * 2.0),
     );
-    painter.rect_filled(pill, radius - pad, TEXT);
+    painter.rect_filled(pill, (radius - pad).max(0.0), TEXT);
 
     for (i, (option, label)) in options.iter().enumerate() {
         let cell = Rect::from_min_size(

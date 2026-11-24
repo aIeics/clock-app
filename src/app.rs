@@ -122,16 +122,18 @@ impl eframe::App for ClockApp {
                     }),
             )
             .show(ui, |ui| {
-                let options = Tab::ALL.map(|tab| (tab, tab.label()));
-                let width = ui.available_width();
-                theme::segmented(
-                    ui,
-                    egui::Id::unique("tab-bar"),
-                    &mut self.tab,
-                    &options,
-                    width,
-                    36.0,
-                );
+                theme::column(ui, theme::MAX_WIDTH, |ui| {
+                    let options = Tab::ALL.map(|tab| (tab, tab.label()));
+                    let size = egui::Vec2::new(ui.available_width(), 38.0);
+                    theme::segmented(
+                        ui,
+                        egui::Id::unique("tab-bar"),
+                        &mut self.tab,
+                        &options,
+                        size,
+                        0.0,
+                    );
+                });
             });
 
         egui::CentralPanel::default()
@@ -158,7 +160,7 @@ impl eframe::App for ClockApp {
                 ui.multiply_opacity(shown);
                 ui.add_space((1.0 - shown) * 14.0);
 
-                match self.tab {
+                theme::column(ui, theme::MAX_WIDTH, |ui| match self.tab {
                     Tab::Clock => {
                         let before = self.settings.clone();
                         self.clock.ui(ui, &mut self.settings);
@@ -177,7 +179,7 @@ impl eframe::App for ClockApp {
                             self.reminders.save(&self.store);
                         }
                     }
-                }
+                });
             });
     }
 }
