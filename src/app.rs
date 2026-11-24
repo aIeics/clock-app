@@ -110,7 +110,11 @@ impl eframe::App for ClockApp {
                     self.reminders.save(&self.store);
                 }
             }
-            Tab::Calendar => self.calendar.ui(ui),
+            Tab::Calendar => {
+                if self.calendar.ui(ui, &mut self.reminders) {
+                    self.reminders.save(&self.store);
+                }
+            }
         });
     }
 }
