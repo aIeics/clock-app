@@ -604,11 +604,17 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
 
     let menu = state.read().expect("popout state lock").menu;
     if let Some([x, y]) = menu {
+        // A new undecorated window would show Windows' white client area until
+        // its first egui frame paints. Make it transparent from creation, and
+        // drop the shadow (which can ghost on transparent windows), so the menu
+        // appears already dark instead of flashing white.
         let builder = egui::ViewportBuilder::default()
             .with_title("Clock menu")
             .with_decorations(false)
             .with_resizable(false)
             .with_taskbar(false)
+            .with_transparent(true)
+            .with_has_shadow(false)
             .with_always_on_top()
             .with_active(true)
             .with_position(egui::pos2(x, y))
