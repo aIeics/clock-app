@@ -110,6 +110,10 @@ pub fn apply(ctx: &egui::Context) {
 /// Manrope, a variable font (SIL Open Font License, see
 /// `assets/fonts/Manrope-OFL.txt`). One file gives every weight we use.
 const MANROPE: &[u8] = include_bytes!("../assets/fonts/Manrope-Variable.ttf");
+/// Digit Tech 7, public domain / CC0 (see `assets/fonts/digit-tech/`).
+const DIGIT_TECH: &[u8] = include_bytes!("../assets/fonts/digit-tech/DigitTech7-Regular.ttf");
+/// E1234, SIL Open Font License (see `assets/fonts/e1234/License.txt`).
+const E1234: &[u8] = include_bytes!("../assets/fonts/e1234/E1234.ttf");
 
 /// The font family for large numbers and headings.
 pub fn bold_family() -> egui::FontFamily {
@@ -121,7 +125,44 @@ pub fn bold(size: f32) -> FontId {
     FontId::new(size, bold_family())
 }
 
-/// Makes Manrope semi-bold the default text font and adds a bold family.
+/// Available popout font choices. Manrope stays the default app font.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PopoutFont {
+    #[default]
+    Manrope,
+    DigitTech,
+    E1234,
+}
+
+impl PopoutFont {
+    pub const ALL: [Self; 3] = [Self::Manrope, Self::DigitTech, Self::E1234];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Manrope => "Manrope (Default)",
+            Self::DigitTech => "Digit Tech",
+            Self::E1234 => "E1234",
+        }
+    }
+
+    pub fn family(self) -> egui::FontFamily {
+        match self {
+            Self::Manrope => bold_family(),
+            Self::DigitTech => egui::FontFamily::Name("digit-tech".into()),
+            Self::E1234 => egui::FontFamily::Name("e1234".into()),
+        }
+    }
+
+    /// Date/secondary text uses proportional for Manrope, same family otherwise.
+    pub fn secondary_family(self) -> egui::FontFamily {
+        match self {
+            Self::Manrope => egui::FontFamily::Proportional,
+            _ => self.family(),
+        }
+    }
+}
+
+/// Makes Manrope semi-bold the default text font and adds bold/display families.
 /// egui's built-in fonts stay behind them as fallbacks for missing glyphs.
 fn install_fonts(ctx: &egui::Context) {
     let weight = |wght: f32| {
@@ -138,6 +179,13 @@ fn install_fonts(ctx: &egui::Context) {
     fonts
         .font_data
         .insert("manrope-bold".into(), weight(780.0).into());
+    fonts.font_data.insert(
+        "digit-tech".into(),
+        egui::FontData::from_static(DIGIT_TECH).into(),
+    );
+    fonts
+        .font_data
+        .insert("e1234".into(), egui::FontData::from_static(E1234).into());
 
     let fallbacks = fonts
         .families
@@ -153,6 +201,13 @@ fn install_fonts(ctx: &egui::Context) {
         .families
         .insert(egui::FontFamily::Proportional, with("manrope-semibold"));
     fonts.families.insert(bold_family(), with("manrope-bold"));
+    fonts.families.insert(
+        egui::FontFamily::Name("digit-tech".into()),
+        with("digit-tech"),
+    );
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("e1234".into()), with("e1234"));
     ctx.set_fonts(fonts);
 }
 

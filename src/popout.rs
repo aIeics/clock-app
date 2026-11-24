@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::clock::{format_date, format_time, until_next_tick};
 use crate::settings::Settings;
 use crate::storage::Store;
-use crate::theme;
+use crate::theme::PopoutFont;
 
 pub const FILE: &str = "popout.json";
 fn viewport_id() -> egui::ViewportId {
@@ -35,6 +35,10 @@ struct State {
     position: Option<[f32; 2]>,
     /// Inner window size, in egui points.
     size: [f32; 2],
+    /// Popout text color as RGBA bytes.
+    text_color: [u8; 4],
+    /// Font used by the popout clock text.
+    font: PopoutFont,
     /// A copy of the clock format options; saved in `settings.json`, not here.
     #[serde(skip)]
     settings: Settings,
@@ -63,6 +67,8 @@ impl Default for State {
             locked: true,
             position: None,
             size: DEFAULT_SIZE,
+            text_color: [255, 255, 255, 255],
+            font: PopoutFont::default(),
             settings: Settings::default(),
             placement: None,
             placement_size: None,
@@ -115,6 +121,11 @@ impl State {
         self.placement_size
             .map(|[x, y]| egui::vec2(x, y))
             .unwrap_or_else(|| self.size())
+    }
+
+    fn color(&self) -> egui::Color32 {
+        let [r, g, b, a] = self.text_color;
+        egui::Color32::from_rgba_unmultiplied(r, g, b, a)
     }
 
     /// Freeze the current layout as the native window's starting geometry.
@@ -217,6 +228,24 @@ fn set_locked(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, loc
     keep_behind_apps(ui);
 }
 
+fn set_font(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, font: PopoutFont) {
+    let mut current = state.write().expect("popout state lock");
+    current.font = font;
+    current.save(store);
+    drop(current);
+    ui.close();
+    keep_behind_apps(ui);
+}
+
+fn set_text_color(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, color: [u8; 4]) {
+    let mut current = state.write().expect("popout state lock");
+    current.text_color = color;
+    current.save(store);
+    drop(current);
+    ui.close();
+    keep_behind_apps(ui);
+}
+
 fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     let mut current = state.write().expect("popout state lock");
     current.open = false;
@@ -305,7 +334,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         return;
     }
 
-    let (locked, settings, position, size, initialized, dragging, resizing) = {
+    let (locked, settings, position, size, initialized, dragging, resizing, color, font) = {
         let current = state.read().expect("popout state lock");
         (
             current.locked,
@@ -315,6 +344,8 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
             current.initialized,
             current.dragging,
             current.resizing,
+            current.color(),
+            current.font,
         )
     };
 
@@ -347,8 +378,8 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     egui::Label::new(
                         egui::RichText::new(format_time(&now, &settings))
                             .size(40.0)
-                            .family(theme::bold_family())
-                            .color(egui::Color32::WHITE),
+                            .family(font.family())
+                            .color(color),
                     )
                     .selectable(false)
                     .sense(sense),
@@ -357,7 +388,8 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     egui::Label::new(
                         egui::RichText::new(format_date(&now))
                             .size(14.0)
-                            .color(egui::Color32::WHITE),
+                            .family(font.secondary_family())
+                            .color(color),
                     )
                     .selectable(false)
                     .sense(sense),
@@ -397,6 +429,31 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     // A container context menu also opens when the click lands on the time or
     // date text, which a plain response-based context menu can miss.
     panel.response.container_context_menu(|ui| {
+        ui.menu_button("Fonts", |ui| {
+            for option in PopoutFont::ALL {
+                let selected = option == font;
+                if ui.selectable_label(selected, option.label()).clicked() {
+                    set_font(ui, state, store, option);
+                }
+            }
+        });
+        ui.menu_button("Color", |ui| {
+            let colors: [(&str, [u8; 4]); 6] = [
+                ("White", [255, 255, 255, 255]),
+                ("Amber", [255, 191, 0, 255]),
+                ("Green", [0, 255, 128, 255]),
+                ("Red", [255, 80, 80, 255]),
+                ("Cyan", [0, 220, 255, 255]),
+                ("Magenta", [255, 100, 255, 255]),
+            ];
+            for (name, value) in colors {
+                let selected = value == [color.r(), color.g(), color.b(), color.a()];
+                if ui.selectable_label(selected, name).clicked() {
+                    set_text_color(ui, state, store, value);
+                }
+            }
+        });
+        ui.separator();
         if locked {
             if ui.button("Unlock").clicked() {
                 set_locked(ui, state, store, false);
@@ -472,6 +529,8 @@ mod tests {
         let mut state = State {
             open: true,
             locked: true,
+            text_color: [0, 255, 128, 255],
+            font: PopoutFont::DigitTech,
             settings: Settings {
                 clock_24h: false,
                 show_seconds: false,
@@ -487,6 +546,8 @@ mod tests {
         assert!(loaded.locked);
         assert_eq!(loaded.position(), egui::pos2(640.0, 200.0));
         assert_eq!(loaded.size(), egui::vec2(320.0, 110.0));
+        assert_eq!(loaded.text_color, [0, 255, 128, 255]);
+        assert_eq!(loaded.font, PopoutFont::DigitTech);
         assert_eq!(loaded.settings, Settings::default());
     }
 }
