@@ -6,6 +6,7 @@ mod app;
 mod calendar;
 mod clock;
 mod icon;
+mod popout;
 mod reminders;
 mod settings;
 mod storage;

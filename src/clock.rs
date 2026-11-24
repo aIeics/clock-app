@@ -7,6 +7,13 @@ use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
 use crate::settings::Settings;
 use crate::theme;
 
+/// What changed while drawing the Clock tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClockChanges {
+    pub settings_changed: bool,
+    pub pop_out: bool,
+}
+
 /// Live local time and date, plus the clock format options.
 #[derive(Default)]
 pub struct ClockView;
@@ -14,10 +21,10 @@ pub struct ClockView;
 impl ClockView {
     /// Draws the dial, the digital time and the format controls.
     ///
-    /// Returns `true` when a setting changed, so the caller can save it.
-    pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    /// Returns what changed, so the caller can save settings and open the pop-out.
+    pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings) -> ClockChanges {
         let now = Local::now();
-        let mut changed = false;
+        let mut changes = ClockChanges::default();
 
         // Everything scales with the window: the dial takes about half the
         // height and the text follows the dial.
@@ -69,7 +76,7 @@ impl ClockView {
         ui.add_space((ui.available_height() - 44.0).max(12.0));
         let spacing = ui.spacing().item_spacing.x;
         let seconds_width = theme::check_width(ui, "Seconds");
-        let row = 120.0 + 18.0 + seconds_width;
+        let row = 120.0 + 18.0 + seconds_width + 18.0 + 84.0;
         ui.horizontal(|ui| {
             ui.add_space(((ui.available_width() - row - spacing) / 2.0).max(0.0));
             let mut format = settings.clock_24h;
@@ -82,17 +89,22 @@ impl ClockView {
                 0.0,
             ) {
                 settings.clock_24h = format;
-                changed = true;
+                changes.settings_changed = true;
             }
             ui.add_space(18.0 - spacing);
-            changed |= theme::check(ui, &mut settings.show_seconds, "Seconds").changed();
+            changes.settings_changed |=
+                theme::check(ui, &mut settings.show_seconds, "Seconds").changed();
+            ui.add_space(18.0 - spacing);
+            changes.pop_out = theme::button_sized(ui, "Pop out", theme::Kind::Ghost, 84.0)
+                .on_hover_text("Open a floating clock on the desktop")
+                .clicked();
         });
 
         // Sleep until the next visible change instead of repainting continuously.
         // Only this tab schedules repaints, so the app is idle on every other tab.
         ui.ctx()
             .request_repaint_after(until_next_tick(&now, settings.show_seconds));
-        changed
+        changes
     }
 }
 

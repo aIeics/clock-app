@@ -3,6 +3,7 @@ use eframe::egui;
 
 use crate::calendar::CalendarView;
 use crate::clock::ClockView;
+use crate::popout::Popout;
 use crate::reminders::{Reminders, RemindersView};
 use crate::settings::Settings;
 use crate::storage::Store;
@@ -44,6 +45,7 @@ pub struct ClockApp {
     reminders_view: RemindersView,
     calendar: CalendarView,
     tray: Option<Tray>,
+    popout: Popout,
 }
 
 impl ClockApp {
@@ -70,6 +72,7 @@ impl ClockApp {
             reminders_view: RemindersView::default(),
             calendar: CalendarView::default(),
             tray,
+            popout: Popout::new(Store::new()),
         }
     }
 }
@@ -162,10 +165,12 @@ impl eframe::App for ClockApp {
 
                 theme::column(ui, theme::MAX_WIDTH, |ui| match self.tab {
                     Tab::Clock => {
-                        let before = self.settings.clone();
-                        self.clock.ui(ui, &mut self.settings);
-                        if self.settings != before {
+                        let changes = self.clock.ui(ui, &mut self.settings);
+                        if changes.settings_changed {
                             self.settings.save(&self.store);
+                        }
+                        if changes.pop_out {
+                            self.popout.open();
                         }
                     }
                     Tab::Timer => self.timer.ui(ui),
@@ -181,5 +186,10 @@ impl eframe::App for ClockApp {
                     }
                 });
             });
+
+        // The floating clock is a child viewport, so it stays available on
+        // every tab (and while the main window is hidden in the tray).
+        self.popout.sync_settings(&self.settings);
+        self.popout.ui(ui.ctx());
     }
 }
