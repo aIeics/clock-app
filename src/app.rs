@@ -109,18 +109,18 @@ impl eframe::App for ClockApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        theme::backdrop(
-            &ui.ctx().layer_painter(egui::LayerId::background()),
-            ui.ctx().content_rect(),
-        );
-
         egui::Panel::top("tabs")
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                left: 16,
-                right: 16,
-                top: 14,
-                bottom: 6,
-            }))
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin {
+                        left: 16,
+                        right: 16,
+                        top: 14,
+                        bottom: 6,
+                    }),
+            )
             .show(ui, |ui| {
                 let options = Tab::ALL.map(|tab| (tab, tab.label()));
                 let width = ui.available_width();
@@ -135,7 +135,11 @@ impl eframe::App for ClockApp {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(16, 10)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin::symmetric(16, 10)),
+            )
             .show(ui, |ui| {
                 // Fade and slide the newly selected tab in. Every tab is
                 // animated each frame so the incoming one starts from zero.

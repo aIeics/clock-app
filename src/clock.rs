@@ -1,37 +1,83 @@
+use std::f32::consts::TAU;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, Timelike};
-use eframe::egui;
+use eframe::egui::{self, Color32, FontId, Pos2, Stroke, Vec2};
 
 use crate::settings::Settings;
+use crate::theme;
 
 /// Live local time and date, plus the clock format options.
 #[derive(Default)]
 pub struct ClockView;
 
 impl ClockView {
-    /// Draws the clock and its format checkboxes.
+    /// Draws the clock and its format switches.
     ///
     /// Returns `true` when a setting changed, so the caller can save it.
     pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         let now = Local::now();
         let mut changed = false;
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.22);
-            ui.label(
-                egui::RichText::new(format_time(&now, settings))
-                    .size(56.0)
-                    .monospace(),
-            );
-            ui.label(egui::RichText::new(format_date(&now)).size(18.0));
+        let avail = ui.available_size();
+        let diameter = (avail.x - 40.0).min(avail.y * 0.5).clamp(140.0, 260.0);
 
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                changed |= ui.checkbox(&mut settings.clock_24h, "24-hour").changed();
-                changed |= ui.checkbox(&mut settings.show_seconds, "Seconds").changed();
-            });
+        ui.add_space(((avail.y - diameter - 200.0) * 0.3).max(4.0));
+        let (rect, painter) =
+            ui.allocate_painter(Vec2::new(avail.x, diameter + 24.0), egui::Sense::hover());
+        paint_dial(&painter, rect.rect.center(), diameter / 2.0, &now, settings);
+
+        // Digital time, with AM/PM set smaller beside it.
+        let text = format_time(&now, settings);
+        let (main, suffix) = match text.split_once(' ') {
+            Some((main, suffix)) => (main.to_string(), Some(suffix.to_string())),
+            None => (text, None),
+        };
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(avail.x, 60.0), egui::Sense::hover());
+        let painter = ui.painter();
+        let big = FontId::proportional(52.0);
+        let small = FontId::proportional(18.0);
+        let suffix_width = suffix.as_ref().map_or(0.0, |suffix| {
+            painter
+                .layout_no_wrap(suffix.clone(), small.clone(), theme::TEXT)
+                .size()
+                .x
+                + 8.0
         });
+        let center = rect.center() - Vec2::new(suffix_width / 2.0, 0.0);
+        let width = theme::tabular_text(painter, center, &main, big, theme::TEXT);
+        if let Some(suffix) = suffix {
+            painter.text(
+                Pos2::new(center.x + width / 2.0 + 8.0, rect.center().y + 10.0),
+                egui::Align2::LEFT_BOTTOM,
+                suffix,
+                small,
+                theme::TEXT_DIM,
+            );
+        }
+
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new(format_date(&now))
+                    .size(15.0)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(18.0);
+        });
+
+        theme::card()
+            .inner_margin(egui::Margin::symmetric(18, 12))
+            .show(ui, |ui| {
+                ui.columns(2, |columns| {
+                    columns[0].vertical_centered(|ui| {
+                        changed |= theme::toggle(ui, &mut settings.clock_24h, "24-hour").changed();
+                    });
+                    columns[1].vertical_centered(|ui| {
+                        changed |=
+                            theme::toggle(ui, &mut settings.show_seconds, "Seconds").changed();
+                    });
+                });
+            });
 
         // Sleep until the next visible change instead of repainting continuously.
         // Only this tab schedules repaints, so the app is idle on every other tab.
@@ -39,6 +85,77 @@ impl ClockView {
             .request_repaint_after(until_next_tick(&now, settings.show_seconds));
         changed
     }
+}
+
+/// An analog clock face. The hands jump with each tick (no sweeping), so the
+/// view still only repaints when the time shown changes.
+fn paint_dial(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    now: &DateTime<Local>,
+    settings: &Settings,
+) {
+    // `turn` is a fraction of a full circle, starting at 12 o'clock.
+    let at = |turn: f32, length: f32| center + Vec2::angled(turn * TAU - TAU / 4.0) * length;
+
+    painter.circle(
+        center,
+        radius,
+        theme::SURFACE,
+        Stroke::new(1.0, theme::BORDER),
+    );
+
+    // The seconds ring fills up over each minute.
+    let second = now.second() as f32;
+    if settings.show_seconds {
+        const STEPS: usize = 120;
+        let filled = ((second + 1.0) / 60.0 * STEPS as f32) as usize;
+        let points: Vec<Pos2> = (0..=filled.min(STEPS))
+            .map(|i| at(i as f32 / STEPS as f32, radius - 4.0))
+            .collect();
+        painter.line(points, Stroke::new(2.0, theme::TEXT));
+    }
+
+    for tick in 0..60 {
+        let turn = tick as f32 / 60.0;
+        let (inner, stroke) = if tick % 5 == 0 {
+            (radius * 0.72, Stroke::new(2.5, theme::TEXT))
+        } else {
+            (
+                radius * 0.78,
+                Stroke::new(1.0, theme::TEXT_DIM.gamma_multiply(0.5)),
+            )
+        };
+        painter.line_segment([at(turn, inner), at(turn, radius * 0.82)], stroke);
+    }
+
+    let minute = now.minute() as f32
+        + if settings.show_seconds {
+            second / 60.0
+        } else {
+            0.0
+        };
+    let hour = (now.hour() % 12) as f32 + minute / 60.0;
+
+    let hand = |turn: f32, length: f32, width: f32, color: Color32| {
+        painter.line_segment(
+            [at(turn + 0.5, radius * 0.08), at(turn, length)],
+            Stroke::new(width, color),
+        );
+        painter.circle_filled(at(turn, length), width / 2.0, color);
+    };
+    hand(hour / 12.0, radius * 0.45, 6.0, theme::TEXT);
+    hand(minute / 60.0, radius * 0.66, 4.0, theme::TEXT);
+    if settings.show_seconds {
+        let turn = second / 60.0;
+        painter.line_segment(
+            [at(turn + 0.5, radius * 0.18), at(turn, radius * 0.76)],
+            Stroke::new(1.5, theme::TEXT_DIM),
+        );
+    }
+    painter.circle_filled(center, 5.0, theme::TEXT);
+    painter.circle_filled(center, 2.0, theme::BG);
 }
 
 /// `09:05:07` in 24-hour mode, `9:05:07 AM` in 12-hour mode.

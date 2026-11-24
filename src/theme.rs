@@ -1,4 +1,4 @@
-//! The app's look: a dark palette, the egui style, and small custom-painted
+//! The app's look: black background, white text, and small custom-painted
 //! widgets (buttons, toggles, segmented controls, icons) shared by every tab.
 //!
 //! Animations here only request repaints while they are moving, so a view
@@ -7,23 +7,22 @@
 use std::f32::consts::TAU;
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Id, Margin, Mesh, Painter, Pos2, Rect, Response, Sense,
-    Shadow, Stroke, StrokeKind, Theme, Ui, Vec2, emath,
+    self, Color32, CornerRadius, FontId, Id, Margin, Painter, Pos2, Rect, Response, Sense, Shadow,
+    Stroke, StrokeKind, Theme, Ui, Vec2, emath,
 };
 
-pub const BG: Color32 = Color32::from_rgb(9, 10, 17);
-pub const SURFACE: Color32 = Color32::from_rgb(19, 21, 32);
-pub const SURFACE_HI: Color32 = Color32::from_rgb(28, 31, 46);
-pub const BORDER: Color32 = Color32::from_rgb(40, 44, 62);
-pub const TEXT: Color32 = Color32::from_rgb(236, 238, 246);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(138, 144, 166);
-pub const ACCENT_A: Color32 = Color32::from_rgb(139, 92, 246);
-pub const ACCENT_B: Color32 = Color32::from_rgb(34, 211, 238);
+pub const BG: Color32 = Color32::BLACK;
+pub const SURFACE: Color32 = Color32::from_rgb(14, 14, 14);
+pub const SURFACE_HI: Color32 = Color32::from_rgb(26, 26, 26);
+pub const BORDER: Color32 = Color32::from_rgb(46, 46, 46);
+pub const TEXT: Color32 = Color32::WHITE;
+pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 140, 140);
+/// Only for alerts and errors.
 pub const DANGER: Color32 = Color32::from_rgb(244, 63, 94);
 
 const RADIUS: u8 = 10;
 
-/// Installs the dark style. The theme is forced to dark so the look doesn't
+/// Installs the style. The theme is forced to dark so the look doesn't
 /// depend on the Windows light/dark setting.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(Theme::Dark);
@@ -54,15 +53,15 @@ pub fn apply(ctx: &egui::Context) {
             offset: [0, 8],
             blur: 24,
             spread: 0,
-            color: Color32::from_black_alpha(120),
+            color: Color32::from_black_alpha(160),
         };
         visuals.popup_shadow = visuals.window_shadow;
-        visuals.extreme_bg_color = Color32::from_rgb(13, 14, 23);
-        visuals.text_edit_bg_color = Some(Color32::from_rgb(13, 14, 23));
+        visuals.extreme_bg_color = SURFACE;
+        visuals.text_edit_bg_color = Some(SURFACE);
         visuals.faint_bg_color = SURFACE;
         visuals.error_fg_color = DANGER;
-        visuals.selection.bg_fill = ACCENT_A.gamma_multiply(0.6);
-        visuals.selection.stroke = Stroke::new(1.0, ACCENT_B);
+        visuals.selection.bg_fill = Color32::from_white_alpha(60);
+        visuals.selection.stroke = Stroke::new(1.0, TEXT);
 
         let widgets = &mut visuals.widgets;
         for (state, fill, stroke) in [
@@ -70,23 +69,19 @@ pub fn apply(ctx: &egui::Context) {
             (&mut widgets.inactive, SURFACE_HI, BORDER),
             (
                 &mut widgets.hovered,
-                Color32::from_rgb(36, 40, 60),
-                ACCENT_A,
+                Color32::from_rgb(36, 36, 36),
+                TEXT_DIM,
             ),
-            (&mut widgets.active, Color32::from_rgb(44, 48, 72), ACCENT_B),
-            (&mut widgets.open, SURFACE_HI, ACCENT_A),
+            (&mut widgets.active, Color32::from_rgb(44, 44, 44), TEXT),
+            (&mut widgets.open, SURFACE_HI, TEXT_DIM),
         ] {
             state.bg_fill = fill;
             state.weak_bg_fill = fill;
             state.bg_stroke = Stroke::new(1.0, stroke);
             state.corner_radius = CornerRadius::same(RADIUS);
+            state.fg_stroke = Stroke::new(1.0, TEXT);
+            state.expansion = 0.0;
         }
-        widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.hovered.fg_stroke = Stroke::new(1.5, TEXT);
-        widgets.active.fg_stroke = Stroke::new(1.5, TEXT);
-        widgets.hovered.expansion = 0.0;
-        widgets.active.expansion = 0.0;
     });
 }
 
@@ -123,93 +118,13 @@ pub fn animate(ctx: &egui::Context, id: Id, target: f32, duration: f32) -> f32 {
     emath::lerp(anim.from..=anim.to, emath::easing::cubic_out(t))
 }
 
-/// Paints the window background: a dark fill with two soft colour glows.
-pub fn backdrop(painter: &Painter, rect: Rect) {
-    painter.rect_filled(rect, 0.0, BG);
-    let size = rect.width().max(rect.height());
-    glow(
-        painter,
-        rect.left_top() + Vec2::new(rect.width() * 0.1, -size * 0.05),
-        size * 0.75,
-        ACCENT_A.gamma_multiply(0.16),
-    );
-    glow(
-        painter,
-        rect.right_bottom() + Vec2::new(-rect.width() * 0.05, size * 0.05),
-        size * 0.7,
-        ACCENT_B.gamma_multiply(0.10),
-    );
-}
-
-/// A radial glow: `color` in the middle fading to transparent at `radius`.
-pub fn glow(painter: &Painter, center: Pos2, radius: f32, color: Color32) {
-    const RINGS: [(f32, f32); 4] = [(0.0, 1.0), (0.35, 0.6), (0.7, 0.22), (1.0, 0.0)];
-    const SEGMENTS: u32 = 48;
-
-    let mut mesh = Mesh::default();
-    for (ring, (r, alpha)) in RINGS.iter().enumerate() {
-        for i in 0..SEGMENTS {
-            let angle = i as f32 / SEGMENTS as f32 * TAU;
-            let pos = center + Vec2::angled(angle) * radius * *r;
-            mesh.colored_vertex(pos, color.gamma_multiply(*alpha));
-        }
-        if ring > 0 {
-            let (inner, outer) = ((ring as u32 - 1) * SEGMENTS, ring as u32 * SEGMENTS);
-            for i in 0..SEGMENTS {
-                let j = (i + 1) % SEGMENTS;
-                mesh.add_triangle(inner + i, outer + i, outer + j);
-                mesh.add_triangle(inner + i, outer + j, inner + j);
-            }
-        }
-    }
-    painter.add(mesh);
-}
-
-/// A rounded rectangle filled with a left-to-right gradient.
-pub fn gradient_rect(painter: &Painter, rect: Rect, radius: f32, left: Color32, right: Color32) {
-    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
-    let corners = [
-        (rect.right_bottom() - Vec2::splat(radius), 0.0),
-        (rect.left_bottom() + Vec2::new(radius, -radius), 0.25),
-        (rect.left_top() + Vec2::splat(radius), 0.5),
-        (rect.right_top() + Vec2::new(-radius, radius), 0.75),
-    ];
-
-    let mut mesh = Mesh::default();
-    let color_at = |x: f32| {
-        let t = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
-        left.lerp_to_gamma(right, t)
-    };
-    mesh.colored_vertex(rect.center(), color_at(rect.center().x));
-    const STEPS: usize = 8;
-    for (corner, start) in corners {
-        for step in 0..=STEPS {
-            let angle = (start + step as f32 / STEPS as f32 * 0.25) * TAU;
-            let pos = corner + Vec2::angled(angle) * radius;
-            mesh.colored_vertex(pos, color_at(pos.x));
-        }
-    }
-    let count = mesh.vertices.len() as u32 - 1;
-    for i in 1..=count {
-        let next = if i == count { 1 } else { i + 1 };
-        mesh.add_triangle(0, i, next);
-    }
-    painter.add(mesh);
-}
-
 /// A card: a slightly raised, rounded panel with a thin border.
 pub fn card() -> egui::Frame {
     egui::Frame::new()
-        .fill(SURFACE.gamma_multiply(0.92))
+        .fill(SURFACE)
         .stroke(Stroke::new(1.0, BORDER))
         .corner_radius(16)
         .inner_margin(Margin::same(16))
-        .shadow(Shadow {
-            offset: [0, 6],
-            blur: 18,
-            spread: 0,
-            color: Color32::from_black_alpha(90),
-        })
 }
 
 /// Small, dimmed, upper-case label above a group of controls.
@@ -223,8 +138,14 @@ pub fn section_label(ui: &mut Ui, text: &str) {
 }
 
 /// Draws `text` centred on `center`, with every digit in a slot of the same
-/// width so changing numbers don't make the text wobble.
-pub fn tabular_text(painter: &Painter, center: Pos2, text: &str, font: FontId, color: Color32) {
+/// width so changing numbers don't make the text wobble. Returns its width.
+pub fn tabular_text(
+    painter: &Painter,
+    center: Pos2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+) -> f32 {
     let digit = painter
         .layout_no_wrap("0".into(), font.clone(), color)
         .size()
@@ -250,19 +171,20 @@ pub fn tabular_text(painter: &Painter, center: Pos2, text: &str, font: FontId, c
         painter.galley(pos, galley, color);
         x += width;
     }
+    total
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Gradient fill: the main action on a screen.
+    /// Solid white with black text: the main action on a screen.
     Primary,
-    /// Quiet fill with a border that lights up on hover.
+    /// Dark fill with a border that lights up on hover.
     Ghost,
     /// Red, for destructive actions.
     Danger,
 }
 
-/// A rounded button with a hover glow and press feedback.
+/// A rounded button with hover and press feedback.
 pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
     let font = FontId::proportional(14.0);
     let galley = ui
@@ -284,53 +206,29 @@ pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
         let painter = ui.painter();
         let radius = f32::from(RADIUS);
 
-        match kind {
+        let text_color = match kind {
             Kind::Primary => {
-                if hover > 0.0 {
-                    painter.rect_filled(
-                        rect.expand(4.0 * hover).translate(Vec2::new(0.0, 3.0)),
-                        radius + 4.0,
-                        ACCENT_A.gamma_multiply(0.25 * hover),
-                    );
-                }
-                let lift = 0.14 * hover;
-                gradient_rect(
-                    painter,
-                    rect,
-                    radius,
-                    ACCENT_A.lerp_to_gamma(Color32::WHITE, lift),
-                    ACCENT_B
-                        .lerp_to_gamma(ACCENT_A, 0.35)
-                        .lerp_to_gamma(Color32::WHITE, lift),
-                );
+                painter.rect_filled(rect, radius, TEXT.lerp_to_gamma(TEXT_DIM, 0.25 * hover));
+                BG
             }
             Kind::Ghost | Kind::Danger => {
-                let accent = if kind == Kind::Danger {
-                    DANGER
-                } else {
-                    ACCENT_A
-                };
-                painter.rect_filled(rect, radius, SURFACE_HI.lerp_to_gamma(accent, 0.12 * hover));
+                let accent = if kind == Kind::Danger { DANGER } else { TEXT };
+                painter.rect_filled(rect, radius, SURFACE_HI.lerp_to_gamma(accent, 0.08 * hover));
                 painter.rect_stroke(
                     rect,
                     radius,
                     Stroke::new(1.0, BORDER.lerp_to_gamma(accent, hover)),
                     StrokeKind::Inside,
                 );
+                if kind == Kind::Danger { DANGER } else { TEXT }
             }
-        }
-
-        let color = match kind {
-            Kind::Primary => Color32::WHITE,
-            Kind::Danger => DANGER.lerp_to_gamma(TEXT, 0.3),
-            Kind::Ghost => TEXT,
         };
-        let color = if enabled {
-            color
+        let text_color = if enabled {
+            text_color
         } else {
-            color.gamma_multiply(0.4)
+            text_color.gamma_multiply(0.4)
         };
-        painter.galley(rect.center() - galley.size() / 2.0, galley, color);
+        painter.galley(rect.center() - galley.size() / 2.0, galley, text_color);
     }
 
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -351,7 +249,7 @@ pub enum Icon {
     Bell,
 }
 
-/// A round button showing one icon.
+/// A round button showing one icon. `primary` is solid white.
 pub fn icon_button(ui: &mut Ui, icon: Icon, diameter: f32, primary: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
 
@@ -365,26 +263,16 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, diameter: f32, primary: bool) -> Res
         let painter = ui.painter();
         let center = rect.center();
 
-        if primary {
-            painter.circle_filled(
-                center + Vec2::new(0.0, 3.0),
-                radius + 5.0 * hover,
-                ACCENT_A.gamma_multiply(0.28 * hover),
-            );
-            let disc = Rect::from_center_size(center, Vec2::splat(radius * 2.0));
-            gradient_rect(painter, disc, radius, ACCENT_A, ACCENT_B);
+        let color = if primary {
+            painter.circle_filled(center, radius, TEXT.lerp_to_gamma(TEXT_DIM, 0.25 * hover));
+            BG
         } else {
             painter.circle(
                 center,
                 radius,
-                SURFACE_HI.lerp_to_gamma(ACCENT_A, 0.18 * hover),
-                Stroke::new(1.0, BORDER.lerp_to_gamma(ACCENT_A, hover)),
+                SURFACE_HI.lerp_to_gamma(TEXT, 0.08 * hover),
+                Stroke::new(1.0, BORDER.lerp_to_gamma(TEXT_DIM, hover)),
             );
-        }
-
-        let color = if primary {
-            Color32::WHITE
-        } else {
             TEXT_DIM.lerp_to_gamma(TEXT, hover)
         };
         let color = if enabled {
@@ -519,30 +407,16 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         );
         let r = track.y / 2.0;
 
-        painter.rect_filled(track_rect, r, SURFACE_HI);
-        if t > 0.0 {
-            gradient_rect(
-                painter,
-                track_rect,
-                r,
-                ACCENT_A.gamma_multiply(t),
-                ACCENT_B.gamma_multiply(t),
-            );
-        }
+        painter.rect_filled(track_rect, r, SURFACE_HI.lerp_to_gamma(TEXT, t));
         painter.rect_stroke(
             track_rect,
             r,
-            Stroke::new(1.0, BORDER.lerp_to_gamma(ACCENT_A, hover * (1.0 - t))),
+            Stroke::new(1.0, BORDER.lerp_to_gamma(TEXT_DIM, hover * (1.0 - t))),
             StrokeKind::Inside,
         );
         let knob_x = emath::lerp((track_rect.left() + r)..=(track_rect.right() - r), t);
         let knob = Pos2::new(knob_x, track_rect.center().y);
-        painter.circle_filled(
-            knob + Vec2::new(0.0, 1.0),
-            r - 2.0,
-            Color32::from_black_alpha(70),
-        );
-        painter.circle_filled(knob, r - 3.0 + hover, Color32::WHITE);
+        painter.circle_filled(knob, r - 3.0 + hover, TEXT_DIM.lerp_to_gamma(BG, t));
 
         let text_pos = Pos2::new(
             track_rect.right() + 10.0,
@@ -554,7 +428,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A row of options with a pill that slides to the selected one.
+/// A row of options with a white pill that slides to the selected one.
 /// Returns `true` when the selection changed.
 pub fn segmented<T: PartialEq + Copy>(
     ui: &mut Ui,
@@ -584,18 +458,7 @@ pub fn segmented<T: PartialEq + Copy>(
         Pos2::new(rect.left() + pad + pos * slot, rect.top() + pad),
         Vec2::new(slot, height - pad * 2.0),
     );
-    painter.rect_filled(
-        pill.translate(Vec2::new(0.0, 2.0)).expand(2.0),
-        radius,
-        ACCENT_A.gamma_multiply(0.18),
-    );
-    gradient_rect(
-        &painter,
-        pill,
-        radius - pad,
-        ACCENT_A,
-        ACCENT_B.lerp_to_gamma(ACCENT_A, 0.35),
-    );
+    painter.rect_filled(pill, radius - pad, TEXT);
 
     for (i, (option, label)) in options.iter().enumerate() {
         let cell = Rect::from_min_size(
@@ -612,9 +475,9 @@ pub fn segmented<T: PartialEq + Copy>(
         let hover = ui
             .ctx()
             .animate_bool_responsive(id.with(i).with("hover"), response.hovered());
-        // Text turns white as the pill passes under it.
+        // Text turns black as the white pill passes under it.
         let under = (1.0 - (pos - i as f32).abs()).clamp(0.0, 1.0);
-        let color = TEXT_DIM.lerp_to_gamma(TEXT, hover.max(under));
+        let color = TEXT_DIM.lerp_to_gamma(TEXT, hover).lerp_to_gamma(BG, under);
         painter.text(
             cell.center(),
             egui::Align2::CENTER_CENTER,
