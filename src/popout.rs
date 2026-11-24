@@ -223,6 +223,7 @@ fn set_locked(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>, loc
     current.resizing = false;
     current.save(store);
     drop(current);
+    ui.close();
     ui.ctx()
         .memory_mut(|mem| mem.move_focus(egui::FocusDirection::None));
     keep_behind_apps(ui);
@@ -254,6 +255,7 @@ fn close(ui: &egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     current.initialized = false;
     current.save(store);
     drop(current);
+    ui.close();
     ui.ctx()
         .send_viewport_cmd(egui::ViewportCommand::Visible(false));
 }
@@ -429,11 +431,16 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     // A container context menu also opens when the click lands on the time or
     // date text, which a plain response-based context menu can miss.
     panel.response.container_context_menu(|ui| {
+        ui.set_min_width(180.0);
         let max_h = 260.0;
         egui::ScrollArea::vertical()
             .max_height(max_h)
             .show(ui, |ui| {
+                ui.set_width(ui.available_width().max(180.0));
+                ui.label(egui::RichText::new("Pop-out").strong());
+                ui.separator();
                 ui.menu_button("Fonts", |ui| {
+                    ui.set_min_width(160.0);
                     for option in PopoutFont::ALL {
                         let selected = option == font;
                         if ui.selectable_label(selected, option.label()).clicked() {
@@ -442,6 +449,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     }
                 });
                 ui.menu_button("Color", |ui| {
+                    ui.set_min_width(140.0);
                     let colors: [(&str, [u8; 4]); 6] = [
                         ("White", [255, 255, 255, 255]),
                         ("Amber", [255, 191, 0, 255]),
@@ -458,12 +466,9 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                     }
                 });
                 ui.separator();
-                if locked {
-                    if ui.button("Unlock").clicked() {
-                        set_locked(ui, state, store, false);
-                    }
-                } else if ui.button("Lock").clicked() {
-                    set_locked(ui, state, store, true);
+                let lock_label = if locked { "Unlock" } else { "Lock" };
+                if ui.button(lock_label).clicked() {
+                    set_locked(ui, state, store, !locked);
                 }
                 if ui.button("Close pop-out").clicked() {
                     close(ui, state, store);
