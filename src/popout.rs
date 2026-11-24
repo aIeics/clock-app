@@ -429,41 +429,46 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     // A container context menu also opens when the click lands on the time or
     // date text, which a plain response-based context menu can miss.
     panel.response.container_context_menu(|ui| {
-        ui.menu_button("Fonts", |ui| {
-            for option in PopoutFont::ALL {
-                let selected = option == font;
-                if ui.selectable_label(selected, option.label()).clicked() {
-                    set_font(ui, state, store, option);
+        let max_h = 260.0;
+        egui::ScrollArea::vertical()
+            .max_height(max_h)
+            .show(ui, |ui| {
+                ui.menu_button("Fonts", |ui| {
+                    for option in PopoutFont::ALL {
+                        let selected = option == font;
+                        if ui.selectable_label(selected, option.label()).clicked() {
+                            set_font(ui, state, store, option);
+                        }
+                    }
+                });
+                ui.menu_button("Color", |ui| {
+                    let colors: [(&str, [u8; 4]); 6] = [
+                        ("White", [255, 255, 255, 255]),
+                        ("Amber", [255, 191, 0, 255]),
+                        ("Green", [0, 255, 128, 255]),
+                        ("Red", [255, 80, 80, 255]),
+                        ("Cyan", [0, 220, 255, 255]),
+                        ("Magenta", [255, 100, 255, 255]),
+                    ];
+                    for (name, value) in colors {
+                        let selected = value == [color.r(), color.g(), color.b(), color.a()];
+                        if ui.selectable_label(selected, name).clicked() {
+                            set_text_color(ui, state, store, value);
+                        }
+                    }
+                });
+                ui.separator();
+                if locked {
+                    if ui.button("Unlock").clicked() {
+                        set_locked(ui, state, store, false);
+                    }
+                } else if ui.button("Lock").clicked() {
+                    set_locked(ui, state, store, true);
                 }
-            }
-        });
-        ui.menu_button("Color", |ui| {
-            let colors: [(&str, [u8; 4]); 6] = [
-                ("White", [255, 255, 255, 255]),
-                ("Amber", [255, 191, 0, 255]),
-                ("Green", [0, 255, 128, 255]),
-                ("Red", [255, 80, 80, 255]),
-                ("Cyan", [0, 220, 255, 255]),
-                ("Magenta", [255, 100, 255, 255]),
-            ];
-            for (name, value) in colors {
-                let selected = value == [color.r(), color.g(), color.b(), color.a()];
-                if ui.selectable_label(selected, name).clicked() {
-                    set_text_color(ui, state, store, value);
+                if ui.button("Close pop-out").clicked() {
+                    close(ui, state, store);
                 }
-            }
-        });
-        ui.separator();
-        if locked {
-            if ui.button("Unlock").clicked() {
-                set_locked(ui, state, store, false);
-            }
-        } else if ui.button("Lock").clicked() {
-            set_locked(ui, state, store, true);
-        }
-        if ui.button("Close pop-out").clicked() {
-            close(ui, state, store);
-        }
+            });
     });
 
     // Windows only applies AlwaysOnBottom when the level changes, so reassert it
