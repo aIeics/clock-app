@@ -359,7 +359,7 @@ impl RemindersView {
             theme::text_field(
                 &mut columns[0],
                 &mut self.when_text,
-                "YYYY-MM-DD HH:MM or HH:MM",
+                "YYYY-MM-DD HH:MM",
                 half,
             );
             theme::text_field(&mut columns[1], &mut self.note, "Note (optional)", half);

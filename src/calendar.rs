@@ -318,7 +318,7 @@ impl CalendarView {
             Vec2::new(width, 34.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                theme::text_field(ui, &mut self.new_time, "HH:MM", 64.0);
+                theme::text_field(ui, &mut self.new_time, "HH:MM", 80.0);
                 let spacing = ui.spacing().item_spacing.x;
                 let title_w = ui.available_width() - 32.0 - spacing;
                 let title = theme::text_field(ui, &mut self.new_title, "Add to this day", title_w);
