@@ -9,6 +9,7 @@ mod icon;
 mod reminders;
 mod settings;
 mod storage;
+mod theme;
 mod timer;
 mod tray;
 
@@ -18,8 +19,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Clock")
-            .with_inner_size([420.0, 340.0])
-            .with_min_inner_size([320.0, 240.0])
+            .with_inner_size([440.0, 620.0])
+            .with_min_inner_size([380.0, 480.0])
             .with_icon(icon::app_icon()),
         ..Default::default()
     };

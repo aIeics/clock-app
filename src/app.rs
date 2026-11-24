@@ -6,6 +6,7 @@ use crate::clock::ClockView;
 use crate::reminders::{Reminders, RemindersView};
 use crate::settings::Settings;
 use crate::storage::Store;
+use crate::theme;
 use crate::timer::TimerView;
 use crate::tray::Tray;
 
@@ -47,6 +48,7 @@ pub struct ClockApp {
 
 impl ClockApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        theme::apply(&cc.egui_ctx);
         let store = Store::new();
         let settings = Settings::load(&store);
         let reminders = Reminders::load(&store);
@@ -107,33 +109,71 @@ impl eframe::App for ClockApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.horizontal(|ui| {
+        theme::backdrop(
+            &ui.ctx().layer_painter(egui::LayerId::background()),
+            ui.ctx().content_rect(),
+        );
+
+        egui::Panel::top("tabs")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 16,
+                right: 16,
+                top: 14,
+                bottom: 6,
+            }))
+            .show(ui, |ui| {
+                let options = Tab::ALL.map(|tab| (tab, tab.label()));
+                let width = ui.available_width();
+                theme::segmented(
+                    ui,
+                    egui::Id::unique("tab-bar"),
+                    &mut self.tab,
+                    &options,
+                    width,
+                    36.0,
+                );
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(16, 10)))
+            .show(ui, |ui| {
+                // Fade and slide the newly selected tab in. Every tab is
+                // animated each frame so the incoming one starts from zero.
+                let mut shown = 1.0;
                 for tab in Tab::ALL {
-                    ui.selectable_value(&mut self.tab, tab, tab.label());
+                    let t = ui.ctx().animate_bool_with_time_and_easing(
+                        egui::Id::unique("tab-fade").with(tab.label()),
+                        tab == self.tab,
+                        0.25,
+                        egui::emath::easing::cubic_out,
+                    );
+                    if tab == self.tab {
+                        shown = t;
+                    }
+                }
+                ui.multiply_opacity(shown);
+                ui.add_space((1.0 - shown) * 14.0);
+
+                match self.tab {
+                    Tab::Clock => {
+                        let before = self.settings.clone();
+                        self.clock.ui(ui, &mut self.settings);
+                        if self.settings != before {
+                            self.settings.save(&self.store);
+                        }
+                    }
+                    Tab::Timer => self.timer.ui(ui),
+                    Tab::Reminders => {
+                        if self.reminders_view.ui(ui, &mut self.reminders) {
+                            self.reminders.save(&self.store);
+                        }
+                    }
+                    Tab::Calendar => {
+                        if self.calendar.ui(ui, &mut self.reminders) {
+                            self.reminders.save(&self.store);
+                        }
+                    }
                 }
             });
-        });
-
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Clock => {
-                let before = self.settings.clone();
-                self.clock.ui(ui, &mut self.settings);
-                if self.settings != before {
-                    self.settings.save(&self.store);
-                }
-            }
-            Tab::Timer => self.timer.ui(ui),
-            Tab::Reminders => {
-                if self.reminders_view.ui(ui, &mut self.reminders) {
-                    self.reminders.save(&self.store);
-                }
-            }
-            Tab::Calendar => {
-                if self.calendar.ui(ui, &mut self.reminders) {
-                    self.reminders.save(&self.store);
-                }
-            }
-        });
     }
 }
