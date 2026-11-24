@@ -266,6 +266,9 @@ fn close(ctx: &egui::Context, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     current.save(store);
     drop(current);
     ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(false));
+    // Hide the menu now; the main window's next pass then drops both viewports.
+    ctx.send_viewport_cmd_to(menu_viewport_id(), egui::ViewportCommand::Visible(false));
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
 }
 
 /// Where the menu window opens for a right-click at `click` (screen points).
@@ -346,10 +349,11 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
         (current.locked, current.font, current.text_color)
     };
 
-    let full_width = egui::vec2(ui.available_width(), 0.0);
     let frame = egui::Frame::menu(ui.style()).corner_radius(0);
     let shown = frame.show(ui, |ui| {
         ui.set_width(MENU_WIDTH - frame.total_margin().sum().x);
+        // Measured inside the frame, so buttons never push the menu wider.
+        let full_width = egui::vec2(ui.available_width(), 0.0);
         ui.label(egui::RichText::new("Font").weak());
         for option in PopoutFont::ALL {
             let button = egui::Button::selectable(option == font, option.label());
@@ -389,9 +393,12 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
         }
     });
 
-    // Fit the window to the menu once its size is known.
+    // Fit the window to the menu once its size is known. The native size
+    // snaps to whole pixels, so allow a point of slack to avoid resizing (and
+    // repainting) forever.
     let wanted = shown.response.rect.size();
-    if inner_size.is_some_and(|size| (size - wanted).length() > 0.5) {
+    let off = |size: egui::Vec2| (size.x - wanted.x).abs() > 1.0 || (size.y - wanted.y).abs() > 1.0;
+    if inner_size.is_some_and(off) {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted));
     }
 }
