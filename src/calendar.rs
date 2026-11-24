@@ -1,99 +1,65 @@
-//! Month grid with today highlighted, days with reminders marked, and a quick
-//! way to add a reminder to the selected day.
+//! One week across the top; the selected day's reminders on an hour-by-hour
+//! line below, plus a quick way to add a reminder to that day.
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveTime};
+use chrono::{DateTime, Datelike, Days, Local, NaiveDate, NaiveTime, Timelike};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::reminders::{Reminders, Repeat};
 use crate::theme::{self, Icon, Kind};
 
-const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-
-/// Weeks of a month in a Monday-first grid. Empty slots are `None`.
-pub fn month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
-    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("a valid month");
-    let mut slot = first.weekday().num_days_from_monday() as usize;
-    let mut weeks = Vec::new();
-    let mut week = [None; 7];
-
-    for day in 1..=days_in_month(year, month) {
-        if slot == 7 {
-            weeks.push(week);
-            week = [None; 7];
-            slot = 0;
-        }
-        week[slot] = NaiveDate::from_ymd_opt(year, month, day);
-        slot += 1;
-    }
-    if slot > 0 {
-        weeks.push(week);
-    }
-
-    weeks
+/// The Monday of the week `date` is in.
+pub fn week_start(date: NaiveDate) -> NaiveDate {
+    date - Days::new(u64::from(date.weekday().num_days_from_monday()))
 }
 
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    NaiveDate::from_ymd_opt(next_year, next_month, 1)
-        .expect("a valid month")
-        .pred_opt()
-        .expect("a day before the first")
-        .day()
+/// Seven consecutive days from `start`.
+pub fn week(start: NaiveDate) -> [NaiveDate; 7] {
+    std::array::from_fn(|i| start + Days::new(i as u64))
 }
 
-/// `year`/`month` after moving `delta` months, with year rollover.
-fn shifted_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
-    let total = year * 12 + (month as i32 - 1) + delta;
-    (total.div_euclid(12), total.rem_euclid(12) as u32 + 1)
+/// First and last hour rows of the day view: 07 to 21, stretched to fit any
+/// reminder outside that range.
+pub fn hour_span(hours: impl IntoIterator<Item = u32>) -> (u32, u32) {
+    hours.into_iter().fold((7, 21), |(first, last), hour| {
+        (first.min(hour), last.max(hour.min(23)))
+    })
 }
 
 #[derive(Debug)]
 pub struct CalendarView {
-    year: i32,
-    month: u32,
+    week: NaiveDate,
     selected: NaiveDate,
     new_title: String,
     new_time: String,
-    new_repeat: Repeat,
     error: Option<String>,
+    /// egui time when the selected day last changed, for the entrance animation.
+    changed_at: f64,
+    scroll_pending: bool,
 }
 
 impl Default for CalendarView {
     fn default() -> Self {
         let today = Local::now().date_naive();
         Self {
-            year: today.year(),
-            month: today.month(),
+            week: week_start(today),
             selected: today,
             new_title: String::new(),
             new_time: String::new(),
-            new_repeat: Repeat::Once,
             error: None,
+            changed_at: f64::NEG_INFINITY,
+            scroll_pending: true,
         }
     }
 }
 
 impl CalendarView {
-    fn go_to_month(&mut self, date: NaiveDate) {
-        (self.year, self.month) = (date.year(), date.month());
+    fn select(&mut self, ui: &egui::Ui, date: NaiveDate) {
+        if date != self.selected {
+            self.selected = date;
+            self.changed_at = ui.input(|input| input.time);
+            self.scroll_pending = true;
+        }
+        self.week = week_start(date);
     }
 
     /// Selected day plus the time typed in the quick-add form.
@@ -107,240 +73,285 @@ impl CalendarView {
 
     /// Draws the tab. Returns `true` if the reminders should be saved.
     pub fn ui(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
-        let mut changed = false;
-
+        self.header(ui);
+        ui.add_space(4.0);
+        self.strip(ui, reminders);
+        ui.add_space(8.0);
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), 16.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| theme::section_label(ui, &self.selected.format("%A %-d %B").to_string()),
+        );
+        let day_height = (ui.available_height() - 58.0).max(120.0);
         egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.add_space(2.0);
-                self.header(ui);
-                ui.add_space(6.0);
-                self.grid(ui, reminders);
-                ui.add_space(10.0);
-                changed |= self.day_panel(ui, reminders);
-                ui.add_space(8.0);
-            });
-
-        changed
+            .max_height(day_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.day(ui, reminders));
+        ui.add_space(8.0);
+        self.quick_add(ui, reminders)
     }
 
-    /// Month name with previous/next arrows and a "Today" button.
+    /// Month name with previous/next week arrows and a "Today" button.
     fn header(&mut self, ui: &mut egui::Ui) {
         let today = Local::now().date_naive();
-        let spacing = ui.spacing().item_spacing.x;
-        let title_width = 170.0;
-        let width = 34.0 * 2.0 + title_width + 72.0 + spacing * 3.0;
-
-        ui.horizontal(|ui| {
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            if theme::icon_button(ui, Icon::ChevronLeft, 34.0, false).clicked() {
-                (self.year, self.month) = shifted_month(self.year, self.month, -1);
-            }
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(title_width, 34.0), Sense::hover());
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                format!("{} {}", MONTHS[self.month as usize - 1], self.year),
-                FontId::proportional(19.0),
-                theme::TEXT,
-            );
-            if theme::icon_button(ui, Icon::ChevronRight, 34.0, false).clicked() {
-                (self.year, self.month) = shifted_month(self.year, self.month, 1);
-            }
-            if theme::button(ui, "Today", Kind::Ghost).clicked() {
-                self.go_to_month(today);
-                self.selected = today;
-            }
-        });
+        // Name the month that most of the week falls in.
+        let middle = self.week + Days::new(3);
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), 34.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new(middle.format("%B %Y").to_string())
+                        .size(17.0)
+                        .color(theme::TEXT),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::button(ui, "Today", Kind::Ghost).clicked() {
+                        self.select(ui, today);
+                    }
+                    if theme::icon_button(ui, Icon::ChevronRight, 32.0, false)
+                        .on_hover_text("Next week")
+                        .clicked()
+                    {
+                        self.select(ui, self.selected + Days::new(7));
+                    }
+                    if theme::icon_button(ui, Icon::ChevronLeft, 32.0, false)
+                        .on_hover_text("Previous week")
+                        .clicked()
+                    {
+                        self.select(ui, self.selected - Days::new(7));
+                    }
+                });
+            },
+        );
     }
 
-    /// The month grid. Slides sideways when the month changes.
-    fn grid(&mut self, ui: &mut egui::Ui, reminders: &Reminders) {
+    /// The seven days of the week. Slides sideways when the week changes.
+    fn strip(&mut self, ui: &mut egui::Ui, reminders: &Reminders) {
         let today = Local::now().date_naive();
-        let weeks = month_grid(self.year, self.month);
         let width = ui.available_width();
-        let gap = 6.0;
+        let gap = 4.0;
         let cell_w = (width - gap * 6.0) / 7.0;
-        let cell_h = (cell_w * 0.8).clamp(32.0, 64.0);
-        let header_h = 22.0;
-        let height = header_h + weeks.len() as f32 * (cell_h + gap);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 58.0), Sense::hover());
 
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-        let index = (self.year * 12 + self.month as i32) as f32;
-        let slide = theme::animate(ui.ctx(), egui::Id::unique("calendar-month"), index, 0.3);
+        let index = (self.week.num_days_from_ce() / 7) as f32;
+        let slide = theme::animate(ui.ctx(), egui::Id::unique("calendar-week"), index, 0.3);
         let offset = (slide - index).clamp(-1.0, 1.0);
-        let shift = Vec2::new(-offset * 36.0, 0.0);
-        let opacity = 1.0 - offset.abs() * 0.8;
-        let painter = ui.painter().clone().with_clip_rect(rect.expand(2.0));
-        let cell_at = |row: usize, col: usize| {
-            Rect::from_min_size(
-                rect.min
-                    + Vec2::new(
-                        col as f32 * (cell_w + gap),
-                        header_h + row as f32 * (cell_h + gap),
-                    ),
-                Vec2::new(cell_w, cell_h),
-            )
-        };
+        let shift = Vec2::new(-offset * 30.0, 0.0);
+        let fade = 1.0 - offset.abs() * 0.8;
+        let painter = ui.painter().with_clip_rect(rect.expand(2.0));
 
-        for (col, name) in WEEKDAYS.iter().enumerate() {
-            let x = rect.left() + col as f32 * (cell_w + gap) + cell_w / 2.0;
+        for (i, date) in week(self.week).into_iter().enumerate() {
+            let cell = Rect::from_min_size(
+                rect.min + Vec2::new(i as f32 * (cell_w + gap), 0.0),
+                Vec2::new(cell_w, rect.height()),
+            );
+            let response = ui
+                .interact(cell, egui::Id::unique(("calendar-day", i)), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                self.select(ui, date);
+            }
+
+            let selected = ui
+                .ctx()
+                .animate_bool_responsive(response.id.with("selected"), date == self.selected);
+            let hover = ui
+                .ctx()
+                .animate_bool_responsive(response.id.with("hover"), response.hovered());
+            let cell = cell.translate(shift);
+            let border = if date == today {
+                Color32::from_rgb(90, 90, 90)
+            } else {
+                theme::BG.lerp_to_gamma(theme::BORDER, hover)
+            };
+            painter.rect_filled(cell, 0.0, theme::BG.lerp_to_gamma(theme::TEXT, selected));
+            painter.rect_stroke(
+                cell,
+                0.0,
+                Stroke::new(1.0, border.gamma_multiply(fade)),
+                StrokeKind::Inside,
+            );
+
+            let ink = theme::TEXT.lerp_to_gamma(theme::BG, selected);
+            let dim = theme::TEXT_DIM.lerp_to_gamma(theme::BG, selected);
+            let weekday = date.format("%a").to_string()[..2].to_uppercase();
             painter.text(
-                Pos2::new(x, rect.top() + header_h / 2.0 - 3.0),
+                Pos2::new(cell.center().x, cell.top() + 13.0),
                 egui::Align2::CENTER_CENTER,
-                name.to_uppercase(),
-                FontId::proportional(11.0),
+                weekday,
+                FontId::proportional(9.5),
+                dim.gamma_multiply(fade),
+            );
+            painter.text(
+                Pos2::new(cell.center().x, cell.top() + 31.0),
+                egui::Align2::CENTER_CENTER,
+                date.day().to_string(),
+                FontId::proportional(17.0),
+                ink.gamma_multiply(fade),
+            );
+            if reminders.on(date).next().is_some() {
+                painter.rect_filled(
+                    Rect::from_center_size(
+                        Pos2::new(cell.center().x, cell.bottom() - 9.0),
+                        Vec2::splat(4.0),
+                    ),
+                    0.0,
+                    ink.gamma_multiply(fade),
+                );
+            }
+        }
+    }
+
+    /// The selected day as hour rows with its reminders placed on them.
+    fn day(&mut self, ui: &mut egui::Ui, reminders: &Reminders) {
+        let mut items: Vec<_> = reminders.on(self.selected).cloned().collect();
+        items.sort_by_key(|reminder| reminder.when);
+        let (first, last) = hour_span(items.iter().map(|reminder| reminder.when.hour()));
+        let row = 28.0;
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(
+            Vec2::new(width, (last - first + 1) as f32 * row + 4.0),
+            Sense::hover(),
+        );
+        let painter = ui.painter();
+
+        for hour in first..=last {
+            let y = rect.top() + (hour - first) as f32 * row;
+            painter.line_segment(
+                [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                Stroke::new(1.0, Color32::from_rgb(24, 24, 24)),
+            );
+            painter.text(
+                Pos2::new(rect.left() + 2.0, y + 3.0),
+                egui::Align2::LEFT_TOP,
+                format!("{hour:02}"),
+                FontId::proportional(10.5),
+                Color32::from_rgb(110, 110, 110),
+            );
+        }
+
+        let block_h = 24.0;
+        let mut previous_bottom = f32::NEG_INFINITY;
+        let mut first_block = None;
+        for (i, reminder) in items.iter().enumerate() {
+            let hours = reminder.when.hour() as f32 + reminder.when.minute() as f32 / 60.0;
+            // Push a block down when it would overlap the one before it.
+            let top = (rect.top() + (hours - first as f32) * row + 2.0).max(previous_bottom + 2.0);
+            previous_bottom = top + block_h;
+
+            let shown = theme::since(ui.ctx(), self.changed_at + i as f64 * 0.06, 0.35);
+            let block = Rect::from_min_max(
+                Pos2::new(rect.left() + 36.0, top + (1.0 - shown) * 6.0),
+                Pos2::new(rect.right() - 4.0, top + (1.0 - shown) * 6.0 + block_h),
+            );
+            first_block.get_or_insert(block);
+            painter.rect_filled(
+                block,
+                0.0,
+                Color32::from_rgb(17, 17, 17).gamma_multiply(shown),
+            );
+            painter.rect_filled(
+                Rect::from_min_size(block.min, Vec2::new(2.0, block_h)),
+                0.0,
+                theme::TEXT.gamma_multiply(shown),
+            );
+            let title = painter.layout_no_wrap(
+                reminder.title.clone(),
+                FontId::proportional(12.5),
+                theme::TEXT.gamma_multiply(shown),
+            );
+            let title_w = title.size().x;
+            painter.with_clip_rect(block).galley(
+                Pos2::new(block.left() + 10.0, block.center().y - title.size().y / 2.0),
+                title,
+                theme::TEXT,
+            );
+            let mut detail = reminder.when.format("%H:%M").to_string();
+            if reminder.repeat != Repeat::Once {
+                detail.push_str(" \u{00b7} ");
+                detail.push_str(reminder.repeat.label());
+            }
+            painter.with_clip_rect(block).text(
+                Pos2::new(block.left() + 18.0 + title_w, block.center().y),
+                egui::Align2::LEFT_CENTER,
+                detail,
+                FontId::proportional(11.5),
+                theme::TEXT_DIM.gamma_multiply(shown),
+            );
+        }
+
+        if items.is_empty() {
+            let block = Rect::from_min_size(
+                Pos2::new(rect.left() + 36.0, rect.top() + 2.0 * row + 2.0),
+                Vec2::new(rect.width() - 40.0, block_h),
+            );
+            painter.rect_stroke(
+                block,
+                0.0,
+                Stroke::new(1.0, theme::BORDER),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                Pos2::new(block.left() + 10.0, block.center().y),
+                egui::Align2::LEFT_CENTER,
+                "Nothing on this day",
+                FontId::proportional(12.5),
                 theme::TEXT_DIM,
             );
         }
 
-        let font = FontId::proportional((cell_h * 0.36).clamp(13.0, 18.0));
-        for (row, week) in weeks.iter().enumerate() {
-            for (col, day) in week.iter().enumerate() {
-                let Some(date) = *day else { continue };
-                let cell = cell_at(row, col);
-                let response = ui
-                    .interact(
-                        cell,
-                        egui::Id::unique(("calendar-day", date)),
-                        Sense::click(),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if response.clicked() {
-                    self.selected = date;
-                }
-
-                let hover = ui
-                    .ctx()
-                    .animate_bool_responsive(response.id.with("hover"), response.hovered());
-                let selected = ui.ctx().animate_bool_with_time_and_easing(
-                    response.id.with("selected"),
-                    self.selected == date,
-                    0.2,
-                    egui::emath::easing::cubic_out,
-                );
-                let is_today = date == today;
-                let cell = cell.translate(shift);
-                let fade = |color: Color32| color.gamma_multiply(opacity);
-
-                let fill = if is_today {
-                    theme::TEXT
-                } else {
-                    theme::SURFACE.lerp_to_gamma(theme::SURFACE_HI, hover)
-                };
-                painter.rect_filled(cell, 8.0, fade(fill));
-                if selected > 0.0 && !is_today {
-                    painter.rect_stroke(
-                        cell.shrink(1.0 - selected),
-                        8.0,
-                        Stroke::new(1.5, fade(theme::TEXT.gamma_multiply(selected))),
-                        StrokeKind::Inside,
-                    );
-                }
-
-                let weekend = col >= 5;
-                let color = if is_today {
-                    theme::BG
-                } else if weekend {
-                    theme::TEXT_DIM
-                } else {
-                    theme::TEXT
-                };
-                painter.text(
-                    cell.center() - Vec2::new(0.0, 3.0),
-                    egui::Align2::CENTER_CENTER,
-                    date.day().to_string(),
-                    font.clone(),
-                    fade(color),
-                );
-                if reminders.on(date).next().is_some() {
-                    let dot = if is_today { theme::BG } else { theme::TEXT };
-                    painter.circle_filled(
-                        Pos2::new(cell.center().x, cell.bottom() - cell_h * 0.16),
-                        2.5,
-                        fade(dot),
-                    );
-                }
+        if self.scroll_pending {
+            self.scroll_pending = false;
+            if let Some(block) = first_block {
+                ui.scroll_to_rect(block.expand(row), Some(egui::Align::TOP));
             }
         }
     }
 
-    /// The selected day's reminders and the quick-add form.
-    fn day_panel(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
+    /// Time, title and a + button that add a reminder to the selected day.
+    fn quick_add(&mut self, ui: &mut egui::Ui, reminders: &mut Reminders) -> bool {
         let mut changed = false;
-        theme::card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new(self.selected.format("%A, %-d %B %Y").to_string())
-                        .size(16.0)
-                        .color(theme::TEXT),
-                );
-
-                let rows: Vec<_> = reminders.on(self.selected).cloned().collect();
-                if rows.is_empty() {
-                    ui.label(egui::RichText::new("Nothing on this day.").color(theme::TEXT_DIM));
-                }
-                for reminder in rows {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}  \u{00b7}  {}",
-                            reminder.when.format("%H:%M"),
-                            reminder.title
-                        ))
-                        .color(theme::TEXT),
+        let width = ui.available_width();
+        let mut add = false;
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, 34.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                theme::text_field(ui, &mut self.new_time, "HH:MM", 64.0);
+                let spacing = ui.spacing().item_spacing.x;
+                let title_w = ui.available_width() - 32.0 - spacing;
+                let title = theme::text_field(ui, &mut self.new_title, "Add to this day", title_w);
+                add |= title.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                add |= theme::icon_button(ui, Icon::Plus, 32.0, true)
+                    .on_hover_text("Add reminder")
+                    .clicked();
+            },
+        );
+        if add {
+            match self.new_reminder_when() {
+                Some(when) if !self.new_title.trim().is_empty() => {
+                    reminders.add(
+                        self.new_title.trim().to_string(),
+                        String::new(),
+                        when,
+                        Repeat::Once,
                     );
+                    self.new_title.clear();
+                    self.new_time.clear();
+                    self.error = None;
+                    self.changed_at = ui.input(|input| input.time);
+                    changed = true;
                 }
-
-                ui.add_space(6.0);
-                theme::section_label(ui, "Add to this day");
-                let width = ui.available_width();
-                ui.columns(2, |columns| {
-                    let half = columns[0].available_width();
-                    theme::text_field(&mut columns[0], &mut self.new_time, "HH:MM", half);
-                    theme::text_field(&mut columns[1], &mut self.new_title, "New reminder", half);
-                });
-                theme::segmented(
-                    ui,
-                    egui::Id::unique("calendar-repeat"),
-                    &mut self.new_repeat,
-                    &REPEATS,
-                    Vec2::new(width, 32.0),
-                    8.0,
-                );
-                ui.add_space(4.0);
-                if theme::button(ui, "Add", Kind::Primary).clicked() {
-                    match self.new_reminder_when() {
-                        Some(when) if !self.new_title.trim().is_empty() => {
-                            reminders.add(
-                                self.new_title.trim().to_string(),
-                                String::new(),
-                                when,
-                                self.new_repeat,
-                            );
-                            self.new_title.clear();
-                            self.new_time.clear();
-                            self.new_repeat = Repeat::Once;
-                            self.error = None;
-                            changed = true;
-                        }
-                        _ => self.error = Some("Enter a time (HH:MM) and a title.".to_string()),
-                    }
-                }
-                if let Some(error) = &self.error {
-                    theme::error_text(ui, error);
-                }
-            });
-        });
+                _ => self.error = Some("Enter a time (HH:MM) and a title.".to_string()),
+            }
+        }
+        if let Some(error) = &self.error {
+            theme::error_text(ui, error);
+        }
         changed
     }
 }
-
-const REPEATS: [(Repeat, &str); 3] = [
-    (Repeat::Once, "Once"),
-    (Repeat::Daily, "Daily"),
-    (Repeat::Weekly, "Weekly"),
-];
 
 #[cfg(test)]
 mod tests {
@@ -351,66 +362,41 @@ mod tests {
     }
 
     #[test]
-    fn a_month_starts_on_its_real_weekday() {
-        let weeks = month_grid(2026, 1); // 1 January 2026 was a Thursday
-        assert_eq!(weeks[0][0], None);
-        assert_eq!(weeks[0][1], None);
-        assert_eq!(weeks[0][2], None);
-        assert_eq!(weeks[0][3], Some(date(2026, 1, 1)));
+    fn a_week_starts_on_monday() {
+        // 25 November 2026 is a Wednesday.
+        assert_eq!(week_start(date(2026, 11, 25)), date(2026, 11, 23));
+        assert_eq!(week_start(date(2026, 11, 23)), date(2026, 11, 23));
+        assert_eq!(week_start(date(2026, 11, 29)), date(2026, 11, 23));
     }
 
     #[test]
-    fn leap_february_has_29_days() {
-        let days: Vec<_> = month_grid(2024, 2)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .collect();
-        assert_eq!(days.len(), 29);
-        assert_eq!(days[28], date(2024, 2, 29));
+    fn a_week_can_cross_months_and_years() {
+        // 1 January 2027 is a Friday.
+        assert_eq!(week_start(date(2027, 1, 1)), date(2026, 12, 28));
+        let days = week(date(2026, 12, 28));
+        assert_eq!(days[0], date(2026, 12, 28));
+        assert_eq!(days[6], date(2027, 1, 3));
     }
 
     #[test]
-    fn a_normal_february_has_28_days() {
-        let days: Vec<_> = month_grid(2025, 2)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .collect();
-        assert_eq!(days.len(), 28);
-        assert!(!days.iter().any(|day| day.day() == 29));
-    }
-
-    #[test]
-    fn every_day_appears_once_in_order() {
-        for month in 1..=12 {
-            let days: Vec<_> = month_grid(2026, month)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .collect();
-            let expected: Vec<_> = (1..=days_in_month(2026, month))
-                .map(|day| date(2026, month, day))
-                .collect();
-            assert_eq!(days, expected, "month {month}");
+    fn a_week_is_seven_consecutive_days() {
+        let days = week(date(2024, 2, 26));
+        for pair in days.windows(2) {
+            assert_eq!(pair[1] - pair[0], chrono::TimeDelta::days(1));
         }
+        assert_eq!(days[3], date(2024, 2, 29)); // leap day
     }
 
     #[test]
-    fn a_month_has_four_to_six_weeks() {
-        for year in 2024..=2027 {
-            for month in 1..=12 {
-                let weeks = month_grid(year, month);
-                assert!((4..=6).contains(&weeks.len()), "{year}-{month}");
-                assert!(weeks.iter().all(|week| week.len() == 7));
-            }
-        }
+    fn the_day_view_covers_seven_to_nine_by_default() {
+        assert_eq!(hour_span([]), (7, 21));
+        assert_eq!(hour_span([9, 13, 18]), (7, 21));
     }
 
     #[test]
-    fn month_navigation_rolls_over_the_year() {
-        assert_eq!(shifted_month(2026, 1, -1), (2025, 12));
-        assert_eq!(shifted_month(2026, 12, 1), (2027, 1));
-        assert_eq!(shifted_month(2026, 6, 25), (2028, 7));
+    fn the_day_view_stretches_to_fit_early_and_late_reminders() {
+        assert_eq!(hour_span([5, 12]), (5, 21));
+        assert_eq!(hour_span([23]), (7, 23));
+        assert_eq!(hour_span([0, 23]), (0, 23));
     }
 }
