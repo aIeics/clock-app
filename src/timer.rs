@@ -190,18 +190,18 @@ impl TimerView {
         // Glide the ring on start, reset and finish. While running it follows
         // the clock directly, at the repaint rate `logic` already schedules.
         let glide = if state == State::Running { 0.0 } else { 0.45 };
-        let fraction = ui
-            .ctx()
-            .animate_value_with_time(ui.id().with("ring"), fraction, glide);
+        let fraction =
+            ui.ctx()
+                .animate_value_with_time(egui::Id::unique("timer-ring"), fraction, glide);
 
         let avail = ui.available_size();
-        let diameter = (avail.x * 0.75).min(avail.y - 330.0).clamp(140.0, 400.0);
+        let diameter = (avail.x * 0.75).min(avail.y - 250.0).clamp(120.0, 400.0);
 
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(((avail.y - diameter - 320.0) * 0.4).max(4.0));
+                    ui.add_space(((avail.y - diameter - 240.0) * 0.4).max(4.0));
                     self.ring(ui, diameter, fraction, shown, state);
                     ui.add_space(16.0);
 
@@ -247,7 +247,7 @@ impl TimerView {
 
         // A one-shot pop when the timer finishes; it settles and stays still.
         let pop = ui.ctx().animate_bool_with_time_and_easing(
-            ui.id().with("finished"),
+            egui::Id::unique("timer-finished"),
             finished,
             0.4,
             egui::emath::easing::back_out,
@@ -350,21 +350,32 @@ fn centered_row(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) 
     });
 }
 
-/// One column of the duration picker: label, +, value, -.
+/// One column of the duration picker: the label above a `- 05 +` row.
 fn stepper(ui: &mut egui::Ui, label: &str, value: &mut u32, max: u32) {
     ui.vertical_centered(|ui| {
         theme::section_label(ui, label);
-        if theme::icon_button(ui, Icon::Plus, 30.0, false).clicked() {
-            *value = if *value >= max { 0 } else { *value + 1 };
-        }
-        ui.label(
-            egui::RichText::new(format!("{value:02}"))
-                .size(26.0)
-                .color(theme::TEXT),
-        );
-        if theme::icon_button(ui, Icon::Minus, 30.0, false).clicked() {
-            *value = if *value == 0 { max } else { *value - 1 };
-        }
+        let spacing = ui.spacing().item_spacing.x;
+        centered_row(ui, 26.0 * 2.0 + 30.0 + spacing * 2.0, |ui| {
+            if theme::icon_button(ui, Icon::Minus, 26.0, false).clicked() {
+                *value = if *value == 0 { max } else { *value - 1 };
+            }
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(30.0, 26.0), egui::Sense::hover());
+            let color = if ui.is_enabled() {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            theme::tabular_text(
+                ui.painter(),
+                rect.center(),
+                &format!("{value:02}"),
+                FontId::proportional(20.0),
+                color,
+            );
+            if theme::icon_button(ui, Icon::Plus, 26.0, false).clicked() {
+                *value = if *value >= max { 0 } else { *value + 1 };
+            }
+        });
     });
 }
 
