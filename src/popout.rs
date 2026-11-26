@@ -29,7 +29,14 @@ const MAX_SIZE: egui::Vec2 = egui::Vec2::new(800.0, 400.0);
 /// Width of the right-click menu window. Its height follows its content.
 const MENU_WIDTH: f32 = 190.0;
 /// First guess at the menu size, used to keep it on screen before it is measured.
-const MENU_ESTIMATE: egui::Vec2 = egui::Vec2::new(MENU_WIDTH, 230.0);
+const MENU_ESTIMATE: egui::Vec2 = egui::Vec2::new(MENU_WIDTH, 280.0);
+/// Uniform text scaling limits when dragging a corner handle.
+const MIN_TEXT_SCALE: f32 = 0.5;
+const MAX_TEXT_SCALE: f32 = 3.0;
+/// Size of the corner handles shown while scaling the text.
+const HANDLE_SIZE: f32 = 10.0;
+/// Space left around the text when the window is fitted to it.
+const TEXT_PADDING: egui::Vec2 = egui::Vec2::new(24.0, 20.0);
 const TEXT_COLORS: [(&str, [u8; 4]); 7] = [
     ("White", [255, 255, 255, 255]),
     ("Black", [0, 0, 0, 255]),
@@ -39,6 +46,14 @@ const TEXT_COLORS: [(&str, [u8; 4]); 7] = [
     ("Cyan", [0, 220, 255, 255]),
     ("Magenta", [255, 100, 255, 255]),
 ];
+
+/// Start of a corner drag that scales the pop-out's text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TextDrag {
+    start_scale: f32,
+    start_distance: f32,
+    center: egui::Pos2,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -55,6 +70,10 @@ struct State {
     text_color: [u8; 4],
     /// Font used by the popout clock text.
     font: PopoutFont,
+    /// Uniform scale applied to the time and date text sizes.
+    text_scale: f32,
+    /// Whether the corner handles for scaling the text are shown.
+    resizing_text: bool,
     /// A copy of the clock format options; saved in `settings.json`, not here.
     #[serde(skip)]
     settings: Settings,
@@ -70,6 +89,9 @@ struct State {
     dragging: bool,
     #[serde(skip)]
     resizing: bool,
+    /// Active corner drag that is scaling the text, if any.
+    #[serde(skip)]
+    text_drag: Option<TextDrag>,
     /// The window has left its one-frame fullscreen creation state. See the
     /// builder comment in `Popout::ui` for why that state is needed.
     #[serde(skip)]
@@ -98,11 +120,14 @@ impl Default for State {
             size: DEFAULT_SIZE,
             text_color: [255, 255, 255, 255],
             font: PopoutFont::default(),
+            text_scale: 1.0,
+            resizing_text: false,
             settings: Settings::default(),
             placement: None,
             placement_size: None,
             dragging: false,
             resizing: false,
+            text_drag: None,
             initialized: false,
             menu: None,
             menu_ready: false,
@@ -140,6 +165,10 @@ impl State {
     fn set_size(&mut self, size: egui::Vec2) {
         let size = size.clamp(MIN_SIZE, MAX_SIZE);
         self.size = [size.x, size.y];
+    }
+
+    fn set_text_scale(&mut self, scale: f32) {
+        self.text_scale = scale.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE);
     }
 
     /// Where the native window is first created. This never changes while it is
@@ -251,6 +280,16 @@ fn keep_behind_apps(ctx: &egui::Context) {
     );
 }
 
+/// Pulling a corner away from the text's centre scales it up; pushing towards
+/// the centre scales it down. Same math for all four corners.
+fn scale_from_drag(drag: TextDrag, pointer: egui::Pos2) -> f32 {
+    if drag.start_distance <= 1.0 {
+        drag.start_scale
+    } else {
+        drag.start_scale * pointer.distance(drag.center) / drag.start_distance
+    }
+}
+
 /// Apply a menu choice to the saved state, then close the menu.
 fn choose(
     ctx: &egui::Context,
@@ -271,6 +310,7 @@ fn close(ctx: &egui::Context, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
     current.open = false;
     current.dragging = false;
     current.resizing = false;
+    current.text_drag = None;
     current.initialized = false;
     current.menu = None;
     current.menu_ready = false;
@@ -350,7 +390,7 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
         )
     });
 
-    let (locked, font, color, open, was_ready) = {
+    let (locked, font, color, resizing_text, open, was_ready) = {
         let mut current = state.write().expect("popout state lock");
         let open = current.menu.is_some();
         // Close on click-away, but only while the menu is shown and once it has
@@ -368,6 +408,7 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
             current.locked,
             current.font,
             current.text_color,
+            current.resizing_text,
             open,
             current.menu_ready,
         )
@@ -398,6 +439,24 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
             }
         });
         ui.separator();
+        ui.label(egui::RichText::new("Resize").weak());
+        let resize_label = if resizing_text {
+            "Done resizing"
+        } else {
+            "Resize text"
+        };
+        if ui
+            .add(egui::Button::new(resize_label).min_size(full_width))
+            .clicked()
+        {
+            choose(&ctx, state, store, |current| {
+                current.resizing_text = !current.resizing_text;
+                current.text_drag = None;
+                current.dragging = false;
+                current.resizing = false;
+            });
+        }
+        ui.separator();
         let lock_label = if locked { "Unlock" } else { "Lock" };
         if ui
             .add(egui::Button::new(lock_label).min_size(full_width))
@@ -407,6 +466,7 @@ fn render_menu(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>
                 current.locked = !locked;
                 current.dragging = false;
                 current.resizing = false;
+                current.text_drag = None;
             });
         }
         if ui
@@ -528,10 +588,24 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
         return;
     }
 
-    let (locked, settings, position, size, initialized, dragging, resizing, color, font) = {
+    let (
+        locked,
+        resizing_text,
+        text_scale,
+        settings,
+        position,
+        size,
+        initialized,
+        dragging,
+        resizing,
+        color,
+        font,
+    ) = {
         let current = state.read().expect("popout state lock");
         (
             current.locked,
+            current.resizing_text,
+            current.text_scale,
             current.settings.clone(),
             current.position(),
             current.size(),
@@ -563,7 +637,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 // `Sense::drag()` also makes the label focusable, which draws
                 // a focus outline. Use the raw drag sense and keep the labels
                 // non-selectable so only the text is visible.
-                let sense = if locked {
+                let sense = if locked || resizing_text {
                     egui::Sense::hover()
                 } else {
                     egui::Sense::DRAG
@@ -571,7 +645,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 let time = ui.add(
                     egui::Label::new(
                         egui::RichText::new(format_time(&now, &settings))
-                            .size(40.0)
+                            .size(40.0 * text_scale)
                             .family(font.family())
                             .color(color),
                     )
@@ -581,32 +655,92 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 let date = ui.add(
                     egui::Label::new(
                         egui::RichText::new(format_date(&now))
-                            .size(14.0)
+                            .size(14.0 * text_scale)
                             .family(font.secondary_family())
                             .color(color),
                     )
                     .selectable(false)
                     .sense(sense),
                 );
-                if !locked {
+                if !locked && !resizing_text {
                     drag_window(
                         ui,
                         state,
                         store,
-                        time.on_hover_cursor(egui::CursorIcon::Grab),
+                        time.clone().on_hover_cursor(egui::CursorIcon::Grab),
                     );
                     drag_window(
                         ui,
                         state,
                         store,
-                        date.on_hover_cursor(egui::CursorIcon::Grab),
+                        date.clone().on_hover_cursor(egui::CursorIcon::Grab),
                     );
                 }
+
+                if resizing_text {
+                    let text_rect = time.rect.union(date.rect);
+                    let center = text_rect.center();
+                    let pointer = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .unwrap_or(center);
+                    for (id, corner, cursor) in [
+                        ("tl", text_rect.left_top(), egui::CursorIcon::ResizeNwSe),
+                        ("tr", text_rect.right_top(), egui::CursorIcon::ResizeNeSw),
+                        ("bl", text_rect.left_bottom(), egui::CursorIcon::ResizeNeSw),
+                        ("br", text_rect.right_bottom(), egui::CursorIcon::ResizeNwSe),
+                    ] {
+                        let handle =
+                            egui::Rect::from_center_size(corner, egui::Vec2::splat(HANDLE_SIZE));
+                        let response = ui
+                            .interact(handle, egui::Id::unique(id), egui::Sense::DRAG)
+                            .on_hover_cursor(cursor);
+                        ui.painter().rect_filled(handle, 2.0, color);
+                        if response.hovered() || response.dragged() {
+                            ui.painter().rect_stroke(
+                                handle,
+                                2.0,
+                                ui.visuals().widgets.active.fg_stroke,
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+
+                        let mut current = state.write().expect("popout state lock");
+                        if response.drag_started() {
+                            current.text_drag = Some(TextDrag {
+                                start_scale: current.text_scale,
+                                start_distance: pointer.distance(center),
+                                center,
+                            });
+                        }
+                        if let Some(drag) = current.text_drag {
+                            if response.dragged() {
+                                current.set_text_scale(scale_from_drag(drag, pointer));
+                                let wanted =
+                                    (text_rect.size() + TEXT_PADDING).clamp(MIN_SIZE, MAX_SIZE);
+                                if (current.size[0] - wanted.x).abs() > 1.0
+                                    || (current.size[1] - wanted.y).abs() > 1.0
+                                {
+                                    current.set_size(wanted);
+                                    ui.ctx().send_viewport_cmd_to(
+                                        viewport_id(),
+                                        egui::ViewportCommand::InnerSize(wanted),
+                                    );
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                            if response.drag_stopped() {
+                                current.text_drag = None;
+                                current.save(store);
+                            }
+                        }
+                    }
+                }
+
                 ui.ctx()
                     .request_repaint_after(until_next_tick(&now, settings.show_seconds));
             });
 
-            if !locked {
+            if !locked && !resizing_text {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
                     // Invisible resize corner: only the text is drawn.
                     let grip = ui.allocate_response(egui::Vec2::splat(16.0), egui::Sense::DRAG);
@@ -747,6 +881,8 @@ mod tests {
             locked: true,
             text_color: [0, 255, 128, 255],
             font: PopoutFont::DigitTech,
+            text_scale: 1.5,
+            resizing_text: true,
             settings: Settings {
                 clock_24h: false,
                 show_seconds: false,
@@ -764,7 +900,35 @@ mod tests {
         assert_eq!(loaded.size(), egui::vec2(320.0, 110.0));
         assert_eq!(loaded.text_color, [0, 255, 128, 255]);
         assert_eq!(loaded.font, PopoutFont::DigitTech);
+        assert_eq!(loaded.text_scale, 1.5);
+        assert!(loaded.resizing_text);
         assert_eq!(loaded.settings, Settings::default());
+    }
+
+    #[test]
+    fn text_scale_is_clamped() {
+        let mut state = State::default();
+        state.set_text_scale(0.1);
+        assert_eq!(state.text_scale, MIN_TEXT_SCALE);
+        state.set_text_scale(10.0);
+        assert_eq!(state.text_scale, MAX_TEXT_SCALE);
+    }
+
+    #[test]
+    fn corner_drag_scales_from_the_start_distance() {
+        let drag = TextDrag {
+            start_scale: 1.0,
+            start_distance: 100.0,
+            center: egui::Pos2::ZERO,
+        };
+        assert_eq!(scale_from_drag(drag, egui::pos2(150.0, 0.0)), 1.5);
+        assert_eq!(scale_from_drag(drag, egui::pos2(50.0, 0.0)), 0.5);
+
+        let zero = TextDrag {
+            start_distance: 0.0,
+            ..drag
+        };
+        assert_eq!(scale_from_drag(zero, egui::pos2(150.0, 0.0)), 1.0);
     }
 
     #[test]
