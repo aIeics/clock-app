@@ -1,4 +1,4 @@
-//! Small JSON files in `%APPDATA%\clock-app\` (decision D1 in `PLAN.md`).
+//! Small JSON files in `%APPDATA%\clock-app\`.
 //!
 //! Files are written atomically: a temp file first, then a rename over the old
 //! one, so a crash mid-write can't leave a half-written settings file behind.

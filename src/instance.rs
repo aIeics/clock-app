@@ -3,12 +3,12 @@
 //! exits instead of adding a second tray icon.
 //!
 //! A named mutex marks the running app; the installer checks the same name
-//! (`AppMutex` in `installer/clock.iss`) so it can ask to close Clock before
-//! updating or uninstalling. A named auto-reset event carries the "show your
+//! so it can ask to close Clock before updating or uninstalling. A named auto-reset event carries the "show your
 //! window" request. The listener thread sleeps in the kernel until then, so
 //! nothing polls.
 
-/// Also used by the installer; keep both in sync.
+/// Also used by the installer: changing it breaks the installer's
+/// "close Clock first" check.
 pub const MUTEX_NAME: &str = "friends-clock-app";
 #[cfg_attr(not(windows), allow(dead_code))]
 const EVENT_NAME: &str = "friends-clock-app.show";

@@ -2,8 +2,7 @@
 //! registry key.
 //!
 //! The registry is the only source of truth, so the Clock tab, the tray menu
-//! and the installer (which writes the same value, see `installer/clock.iss`)
-//! always agree. No admin rights are needed for `HKEY_CURRENT_USER`.
+//! and the installer (which writes the same value) always agree. No admin rights are needed for `HKEY_CURRENT_USER`.
 
 use std::path::Path;
 

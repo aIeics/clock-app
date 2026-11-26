@@ -12,4 +12,4 @@ First public release.
 - Close to the system tray; Restore, Start with Windows and Quit in the tray menu
 - Start with Windows, starting hidden in the tray
 - Single instance: opening Clock again shows the running one
-- Per-user installer (no admin rights) and a portable zip; no VC++ runtime needed
+- Per-user installer (no admin rights); no VC++ runtime needed

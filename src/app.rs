@@ -149,7 +149,7 @@ impl eframe::App for ClockApp {
         }
 
         // Sleep until the next reminder instead of polling. This also wakes
-        // `logic` while the window is minimized (D3).
+        // `logic` while the window is minimized.
         if let Some(next) = self.reminders.next_due() {
             ctx.request_repaint_after((next - Local::now()).to_std().unwrap_or_default());
         }

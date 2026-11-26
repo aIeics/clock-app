@@ -17,8 +17,6 @@ A lightweight desktop clock for Windows, written in Rust: clock, timer, reminder
 
 Download `Clock-Setup-<version>.exe` from [Releases](https://github.com/aIeics/clock-app/releases) and run it. It installs for your user only (no admin rights) to `%LOCALAPPDATA%\Programs\Clock` and adds a Start menu shortcut.
 
-Prefer no installer? Download the `.zip`, unpack it anywhere and run `clock-app.exe`.
-
 Uninstall from Settings → Apps. Your settings and reminders in `%APPDATA%\clock-app` are kept; delete that folder to remove them too.
 
 Windows 10 or 11, 64-bit. The app is not code-signed yet, so Windows SmartScreen may warn on first run: choose "More info" → "Run anyway".
@@ -32,15 +30,11 @@ cargo run                 # debug build, with a console for logs
 cargo build --release     # small optimized build: target/release/clock-app.exe
 ```
 
-The installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install --id JRSoftware.InnoSetup -e --scope user`):
-
-```powershell
-.\installer\build.ps1     # → target\installer\Clock-Setup-<version>.exe and a .zip
-```
+The release build runs on its own: copy `clock-app.exe` anywhere and start it.
 
 ## Contributing
 
-Issues and pull requests are welcome. Work happens on a branch per task, merged into `main` when done; the rules (also used by AI assistants) are in [`CLAUDE.md`](CLAUDE.md), and the roadmap and design decisions are in [`PLAN.md`](PLAN.md).
+Issues and pull requests are welcome. Run `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` before opening a pull request.
 
 ## License
 

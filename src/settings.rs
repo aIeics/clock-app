@@ -1,4 +1,4 @@
-//! User settings, saved to `settings.json` (decision D1 in `PLAN.md`).
+//! User settings, saved to `settings.json`.
 //!
 //! Unknown fields are ignored and missing fields fall back to the defaults, so
 //! an old or hand-edited file still loads.
