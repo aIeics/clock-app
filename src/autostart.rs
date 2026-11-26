@@ -110,4 +110,23 @@ mod tests {
         let line = command_line(Path::new(r"C:\Program Files\Clock\clock-app.exe"));
         assert_eq!(line, r#""C:\Program Files\Clock\clock-app.exe" --tray"#);
     }
+
+    /// Touches the real `Run` key, so it only runs on request:
+    /// `cargo test -- --ignored`. It puts the old state back afterwards.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn turns_on_and_off_in_the_registry() {
+        let before = is_enabled();
+
+        set(true).expect("turn on");
+        assert!(is_enabled());
+        set(false).expect("turn off");
+        assert!(!is_enabled());
+        set(false).expect("turning off twice is fine");
+
+        if before {
+            set(true).expect("restore");
+        }
+    }
 }

@@ -53,8 +53,7 @@ pub struct ClockApp {
 }
 
 impl ClockApp {
-    /// `start_in_tray` is true when the window was created hidden (a start at
-    /// login).
+    /// `start_in_tray` is true for a start at login: the window stays hidden.
     pub fn new(cc: &eframe::CreationContext<'_>, running: Running, start_in_tray: bool) -> Self {
         theme::apply(&cc.egui_ctx);
         let store = Store::new();
@@ -69,10 +68,12 @@ impl ClockApp {
             }
         };
 
-        // Without a tray icon a hidden window could never come back.
-        if start_in_tray && tray.is_none() {
+        // eframe always shows the window after its first frame, then applies
+        // this frame's commands, so this hides it again right away. Only with
+        // a tray icon: without one, a hidden window could never come back.
+        if start_in_tray && tray.is_some() {
             cc.egui_ctx
-                .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
         running.on_show_request({

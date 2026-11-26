@@ -33,8 +33,7 @@ fn main() -> eframe::Result {
             .with_title("Clock")
             .with_inner_size([440.0, 620.0])
             .with_min_inner_size([380.0, 480.0])
-            .with_icon(icon::app_icon())
-            .with_visible(!start_in_tray),
+            .with_icon(icon::app_icon()),
         ..Default::default()
     };
 
