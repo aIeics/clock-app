@@ -21,6 +21,17 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 # System tray icon: close-to-tray behaviour. Linux-only default features stay off.
 tray-icon = { version = "0.26", default-features = false }
 
+# Windows only: "Start with Windows" (the HKCU Run registry key) and the
+# single-instance check. eframe and tray-icon already build this exact crate,
+# so it adds nothing to the build.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+
 # Small, fast release binary.
 [profile.release]
 opt-level = "z"
