@@ -50,6 +50,8 @@ const TEXT_COLORS: [(&str, [u8; 4]); 7] = [
 /// Start of a corner drag that scales the pop-out's text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TextDrag {
+    /// Only the handle that started the drag may change the scale.
+    handle: &'static str,
     start_scale: f32,
     start_distance: f32,
     center: egui::Pos2,
@@ -168,7 +170,11 @@ impl State {
     }
 
     fn set_text_scale(&mut self, scale: f32) {
-        self.text_scale = scale.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE);
+        // A non-finite scale would poison label rectangles and panic egui's
+        // widget-rect checks, so ignore it instead of storing it.
+        if scale.is_finite() {
+            self.text_scale = scale.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE);
+        }
     }
 
     /// Where the native window is first created. This never changes while it is
@@ -283,10 +289,21 @@ fn keep_behind_apps(ctx: &egui::Context) {
 /// Pulling a corner away from the text's centre scales it up; pushing towards
 /// the centre scales it down. Same math for all four corners.
 fn scale_from_drag(drag: TextDrag, pointer: egui::Pos2) -> f32 {
-    if drag.start_distance <= 1.0 {
+    if drag.start_distance <= 1.0 || !drag.start_distance.is_finite() {
         drag.start_scale
     } else {
         drag.start_scale * pointer.distance(drag.center) / drag.start_distance
+    }
+}
+
+/// Window size that fits unwrapped text with a little padding. Never feed a
+/// non-finite size to the native window.
+fn fitted_size(text_rect: egui::Rect) -> egui::Vec2 {
+    let size = text_rect.size() + TEXT_PADDING;
+    if size.is_finite() {
+        size.clamp(MIN_SIZE, MAX_SIZE)
+    } else {
+        MIN_SIZE
     }
 }
 
@@ -650,7 +667,11 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                             .color(color),
                     )
                     .selectable(false)
-                    .sense(sense),
+                    .sense(sense)
+                    // Wrapping would make the size depend on the window width,
+                    // so fitting the window to the text would feed back on
+                    // itself and grow forever.
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 );
                 let date = ui.add(
                     egui::Label::new(
@@ -660,7 +681,8 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                             .color(color),
                     )
                     .selectable(false)
-                    .sense(sense),
+                    .sense(sense)
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 );
                 if !locked && !resizing_text {
                     drag_window(
@@ -680,9 +702,7 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                 if resizing_text {
                     let text_rect = time.rect.union(date.rect);
                     let center = text_rect.center();
-                    let pointer = ui
-                        .input(|input| input.pointer.interact_pos())
-                        .unwrap_or(center);
+                    let pointer = ui.input(|input| input.pointer.interact_pos());
                     for (id, corner, cursor) in [
                         ("tl", text_rect.left_top(), egui::CursorIcon::ResizeNwSe),
                         ("tr", text_rect.right_top(), egui::CursorIcon::ResizeNeSw),
@@ -707,25 +727,20 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                         let mut current = state.write().expect("popout state lock");
                         if response.drag_started() {
                             current.text_drag = Some(TextDrag {
+                                handle: id,
                                 start_scale: current.text_scale,
-                                start_distance: pointer.distance(center),
+                                start_distance: pointer.map_or(0.0, |p| p.distance(center)),
                                 center,
                             });
                         }
-                        if let Some(drag) = current.text_drag {
-                            if response.dragged() {
+                        let active = current.text_drag.is_some_and(|drag| drag.handle == id);
+                        if active {
+                            // Without a pointer position, keep the scale instead
+                            // of collapsing it when the pointer leaves the window.
+                            if let (Some(pointer), Some(drag)) = (pointer, current.text_drag)
+                                && response.dragged()
+                            {
                                 current.set_text_scale(scale_from_drag(drag, pointer));
-                                let wanted =
-                                    (text_rect.size() + TEXT_PADDING).clamp(MIN_SIZE, MAX_SIZE);
-                                if (current.size[0] - wanted.x).abs() > 1.0
-                                    || (current.size[1] - wanted.y).abs() > 1.0
-                                {
-                                    current.set_size(wanted);
-                                    ui.ctx().send_viewport_cmd_to(
-                                        viewport_id(),
-                                        egui::ViewportCommand::InnerSize(wanted),
-                                    );
-                                }
                                 ui.ctx().request_repaint();
                             }
                             if response.drag_stopped() {
@@ -733,6 +748,21 @@ fn render(ui: &mut egui::Ui, state: &Arc<RwLock<State>>, store: &Arc<Store>) {
                                 current.save(store);
                             }
                         }
+                    }
+
+                    // With unwrapped text this size depends only on the scale,
+                    // not on the window width, so the fit settles after one
+                    // frame and the handles stay inside the window.
+                    let wanted = fitted_size(text_rect);
+                    let mut current = state.write().expect("popout state lock");
+                    if (current.size[0] - wanted.x).abs() > 1.0
+                        || (current.size[1] - wanted.y).abs() > 1.0
+                    {
+                        current.set_size(wanted);
+                        ui.ctx().send_viewport_cmd_to(
+                            viewport_id(),
+                            egui::ViewportCommand::InnerSize(wanted),
+                        );
                     }
                 }
 
@@ -915,8 +945,37 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_scale_is_ignored() {
+        let mut state = State {
+            text_scale: 1.25,
+            ..Default::default()
+        };
+        state.set_text_scale(f32::NAN);
+        assert_eq!(state.text_scale, 1.25);
+        state.set_text_scale(f32::INFINITY);
+        assert_eq!(state.text_scale, 1.25);
+    }
+
+    #[test]
+    fn fitted_text_size_is_always_a_valid_window_size() {
+        let small = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 40.0));
+        assert_eq!(fitted_size(small), MIN_SIZE);
+        assert_eq!(fitted_size(egui::Rect::NOTHING), MIN_SIZE);
+
+        let normal = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 60.0));
+        assert_eq!(fitted_size(normal), egui::vec2(224.0, 80.0));
+
+        let huge = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(5000.0, 5000.0));
+        assert_eq!(fitted_size(huge), MAX_SIZE);
+
+        let broken = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(f32::NAN, f32::NAN));
+        assert_eq!(fitted_size(broken), MIN_SIZE);
+    }
+
+    #[test]
     fn corner_drag_scales_from_the_start_distance() {
         let drag = TextDrag {
+            handle: "br",
             start_scale: 1.0,
             start_distance: 100.0,
             center: egui::Pos2::ZERO,
