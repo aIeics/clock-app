@@ -1,9 +1,11 @@
 [package]
 name = "clock-app"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.95" # minimum required by eframe 0.37
 description = "Lightweight desktop clock: clock, timer, reminders and calendar."
+license = "MIT"
+repository = "https://github.com/aIeics/clock-app"
 publish = false
 
 # Keep this list short. Ask before adding a crate (see CLAUDE.md).
