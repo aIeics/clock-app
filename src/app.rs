@@ -1,15 +1,17 @@
 use chrono::Local;
 use eframe::egui;
 
+use crate::autostart;
 use crate::calendar::CalendarView;
 use crate::clock::ClockView;
+use crate::instance::Running;
 use crate::popout::Popout;
 use crate::reminders::{Reminders, RemindersView};
 use crate::settings::Settings;
 use crate::storage::Store;
 use crate::theme;
 use crate::timer::TimerView;
-use crate::tray::Tray;
+use crate::tray::{self, Tray};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
@@ -46,21 +48,37 @@ pub struct ClockApp {
     calendar: CalendarView,
     tray: Option<Tray>,
     popout: Popout,
+    /// "Start with Windows", read from the registry at start-up.
+    autostart: bool,
 }
 
 impl ClockApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    /// `start_in_tray` is true when the window was created hidden (a start at
+    /// login).
+    pub fn new(cc: &eframe::CreationContext<'_>, running: Running, start_in_tray: bool) -> Self {
         theme::apply(&cc.egui_ctx);
         let store = Store::new();
         let settings = Settings::load(&store);
         let reminders = Reminders::load(&store);
-        let tray = match Tray::new(cc.egui_ctx.clone()) {
+        let autostart = autostart::is_enabled();
+        let tray = match Tray::new(cc.egui_ctx.clone(), autostart) {
             Ok(tray) => Some(tray),
             Err(err) => {
                 eprintln!("clock-app: {err}");
                 None
             }
         };
+
+        // Without a tray icon a hidden window could never come back.
+        if start_in_tray && tray.is_none() {
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+
+        running.on_show_request({
+            let ctx = cc.egui_ctx.clone();
+            move || tray::show_window(&ctx)
+        });
 
         Self {
             tab: Tab::default(),
@@ -73,6 +91,19 @@ impl ClockApp {
             calendar: CalendarView::default(),
             tray,
             popout: Popout::new(Store::new()),
+            autostart,
+        }
+    }
+
+    /// Turns "Start with Windows" on or off, then shows the real result in
+    /// both the Clock tab and the tray menu.
+    fn set_autostart(&mut self, on: bool) {
+        if let Err(err) = autostart::set(on) {
+            eprintln!("clock-app: {err}");
+        }
+        self.autostart = autostart::is_enabled();
+        if let Some(tray) = &self.tray {
+            tray.set_autostart_checked(self.autostart);
         }
     }
 }
@@ -92,6 +123,12 @@ impl eframe::App for ClockApp {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
+        // The tray menu's "Start with Windows" item flips the setting. The
+        // registry is re-read, in case the installer changed it meanwhile.
+        if self.tray.as_ref().is_some_and(Tray::take_autostart_click) {
+            self.set_autostart(!autostart::is_enabled());
         }
 
         // Called even while the window is hidden, so timers and reminders can
@@ -171,9 +208,13 @@ impl eframe::App for ClockApp {
 
                 theme::column(ui, theme::MAX_WIDTH, |ui| match self.tab {
                     Tab::Clock => {
-                        let changes = self.clock.ui(ui, &mut self.settings);
+                        let mut autostart = self.autostart;
+                        let changes = self.clock.ui(ui, &mut self.settings, &mut autostart);
                         if changes.settings_changed {
                             self.settings.save(&self.store);
+                        }
+                        if changes.autostart_changed {
+                            self.set_autostart(autostart);
                         }
                         if changes.pop_out {
                             self.popout.open();

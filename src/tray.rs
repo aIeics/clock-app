@@ -10,26 +10,32 @@ use std::sync::{
 
 use eframe::egui;
 use tray_icon::TrayIcon;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 
 const RESTORE_ID: &str = "clock-app.restore";
+const AUTOSTART_ID: &str = "clock-app.autostart";
 const QUIT_ID: &str = "clock-app.quit";
+
+/// Shows, un-minimizes and focuses the main window. Safe to call from any
+/// thread; also used when a second launch asks for the window.
+pub fn show_window(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    ctx.request_repaint();
+}
 
 #[derive(Clone)]
 struct Actions {
     ctx: egui::Context,
     quitting: Arc<AtomicBool>,
+    autostart_clicked: Arc<AtomicBool>,
 }
 
 impl Actions {
     fn restore(&self) {
         self.quitting.store(false, Ordering::SeqCst);
-        self.ctx
-            .send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        self.ctx
-            .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-        self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        self.ctx.request_repaint();
+        show_window(&self.ctx);
     }
 
     fn quit(&self) {
@@ -37,19 +43,30 @@ impl Actions {
         self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         self.ctx.request_repaint();
     }
+
+    /// The registry write happens in `ClockApp::logic`, on the UI thread.
+    fn toggle_autostart(&self) {
+        self.autostart_clicked.store(true, Ordering::SeqCst);
+        self.ctx.request_repaint();
+    }
 }
 
 /// Kept in `ClockApp` so the native tray icon stays alive while the app runs.
 pub struct Tray {
     _icon: TrayIcon,
+    autostart: CheckMenuItem,
     quitting: Arc<AtomicBool>,
+    autostart_clicked: Arc<AtomicBool>,
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context) -> Result<Self, String> {
+    /// `autostart` is the current "Start with Windows" state for the menu's
+    /// check mark.
+    pub fn new(ctx: egui::Context, autostart: bool) -> Result<Self, String> {
         let actions = Actions {
             ctx,
             quitting: Arc::new(AtomicBool::new(false)),
+            autostart_clicked: Arc::new(AtomicBool::new(false)),
         };
 
         MenuEvent::set_event_handler({
@@ -57,6 +74,8 @@ impl Tray {
             Some(move |event: MenuEvent| {
                 if event.id() == RESTORE_ID {
                     actions.restore();
+                } else if event.id() == AUTOSTART_ID {
+                    actions.toggle_autostart();
                 } else if event.id() == QUIT_ID {
                     actions.quit();
                 }
@@ -83,9 +102,17 @@ impl Tray {
         });
 
         let restore = MenuItem::with_id(RESTORE_ID, "Restore", true, None);
+        let autostart_item =
+            CheckMenuItem::with_id(AUTOSTART_ID, "Start with Windows", true, autostart, None);
         let quit = MenuItem::with_id(QUIT_ID, "Quit", true, None);
-        let menu = Menu::with_items(&[&restore, &quit])
-            .map_err(|err| format!("could not build tray menu: {err}"))?;
+        let menu = Menu::with_items(&[
+            &restore,
+            &PredefinedMenuItem::separator(),
+            &autostart_item,
+            &PredefinedMenuItem::separator(),
+            &quit,
+        ])
+        .map_err(|err| format!("could not build tray menu: {err}"))?;
 
         let data = crate::icon::app_icon();
         let icon = tray_icon::Icon::from_rgba(data.rgba, data.width, data.height)
@@ -100,7 +127,9 @@ impl Tray {
 
         Ok(Self {
             _icon: tray,
+            autostart: autostart_item,
             quitting: actions.quitting,
+            autostart_clicked: actions.autostart_clicked,
         })
     }
 
@@ -108,6 +137,16 @@ impl Tray {
     /// can still hide the window without ending the process.
     pub fn quit_requested(&self) -> bool {
         self.quitting.load(Ordering::SeqCst)
+    }
+
+    /// True once per click on "Start with Windows" in the tray menu.
+    pub fn take_autostart_click(&self) -> bool {
+        self.autostart_clicked.swap(false, Ordering::SeqCst)
+    }
+
+    /// Keeps the menu's check mark in line with the real setting.
+    pub fn set_autostart_checked(&self, on: bool) {
+        self.autostart.set_checked(on);
     }
 }
 
@@ -118,6 +157,9 @@ mod tests {
 
     #[test]
     fn menu_ids_are_distinct() {
-        assert_ne!(MenuId::new(RESTORE_ID), MenuId::new(QUIT_ID));
+        let ids = [RESTORE_ID, AUTOSTART_ID, QUIT_ID].map(MenuId::new);
+        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[0], ids[2]);
+        assert_ne!(ids[1], ids[2]);
     }
 }

@@ -12,6 +12,8 @@ use crate::theme;
 pub struct ClockChanges {
     pub settings_changed: bool,
     pub pop_out: bool,
+    /// The "Start with Windows" box was clicked.
+    pub autostart_changed: bool,
 }
 
 /// Live local time and date, plus the clock format options.
@@ -21,8 +23,14 @@ pub struct ClockView;
 impl ClockView {
     /// Draws the dial, the digital time and the format controls.
     ///
-    /// Returns what changed, so the caller can save settings and open the pop-out.
-    pub fn ui(&mut self, ui: &mut egui::Ui, settings: &mut Settings) -> ClockChanges {
+    /// Returns what changed, so the caller can save settings, open the pop-out
+    /// and apply `autostart` ("Start with Windows").
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        settings: &mut Settings,
+        autostart: &mut bool,
+    ) -> ClockChanges {
         let now = Local::now();
         let mut changes = ClockChanges::default();
 
@@ -73,7 +81,7 @@ impl ClockView {
         );
 
         // Format controls sit at the bottom of the tab.
-        ui.add_space((ui.available_height() - 44.0).max(12.0));
+        ui.add_space((ui.available_height() - 76.0).max(12.0));
         let spacing = ui.spacing().item_spacing.x;
         let seconds_width = theme::check_width(ui, "Seconds");
         let row = 120.0 + 18.0 + seconds_width + 18.0 + 84.0;
@@ -102,6 +110,19 @@ impl ClockView {
                 changes.pop_out = theme::button_sized(ui, "Pop out", theme::Kind::Ghost, 84.0)
                     .on_hover_text("Open a floating clock on the desktop")
                     .clicked();
+            },
+        );
+
+        let autostart_label = "Start with Windows";
+        let autostart_width = theme::check_width(ui, autostart_label);
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.add_space(((ui.available_width() - autostart_width) / 2.0).max(0.0));
+                changes.autostart_changed = theme::check(ui, autostart, autostart_label)
+                    .on_hover_text("Start Clock in the tray when you sign in to Windows")
+                    .changed();
             },
         );
 
