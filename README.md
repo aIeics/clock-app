@@ -15,4 +15,11 @@ cargo build --release     # small optimized build: target/release/clock-app.exe
 
 ## Contributing
 
-Work happens on a branch per task, merged into `main` when done. The rules (also used by AI assistants) are in [`CLAUDE.md`](CLAUDE.md).
+Work happens on a branch per task, merged into `main` when done. The rules (also used by AI assistants) are in [`CLAUDE.md`](CLAUDE.md) (shared) and [`PROJECT.md`](PROJECT.md) (this project).
+
+## Projects
+
+This repo (`friends`) holds one project at a time on `main`; finished projects are archived on their own branch.
+
+- **Current:** Clock (`main`)
+- **Archived:** none yet
